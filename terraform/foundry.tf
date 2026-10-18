@@ -49,6 +49,54 @@ data "azapi_resource" "existing_foundry" {
   response_export_values = ["properties.customSubDomainName", "properties.allowProjectManagement", "kind"]
 }
 
+# The existing account's own connections, to find the Application Insights its projects trace to.
+data "azapi_resource_list" "existing_foundry_connections" {
+  count = local.create_foundry ? 0 : 1
+
+  type      = "Microsoft.CognitiveServices/accounts/connections@2025-06-01"
+  parent_id = var.existing_foundry_account_id
+  response_export_values = {
+    appinsights = "value[?properties.category == 'AppInsights'].properties.target"
+  }
+}
+
+# Foundry sends the traces of every project in an account to the Application Insights connected to the account, so
+# in an existing account this project's traces land in that account's Application Insights. Insights and trace
+# evaluations read them as the project identity, which gets read access there. An account with no Application
+# Insights yet gets this deployment's.
+resource "azurerm_role_assignment" "project_account_appinsights_reader" {
+  for_each = length(local.account_appinsights_ids) > 0 ? toset(["Log Analytics Reader", "Monitoring Data Reader", "Monitoring Reader"]) : toset([])
+
+  scope                = local.account_appinsights_ids[0]
+  role_definition_name = each.value
+  principal_id         = azapi_resource.ai_foundry_project.output.identity.principalId
+  principal_type       = "ServicePrincipal"
+}
+
+resource "azapi_resource" "existing_foundry_appinsights_connection" {
+  count = !local.create_foundry && length(local.account_appinsights_ids) == 0 ? 1 : 0
+
+  type                      = "Microsoft.CognitiveServices/accounts/connections@2025-06-01"
+  name                      = "appi${local.connection_suffix}"
+  parent_id                 = var.existing_foundry_account_id
+  schema_validation_enabled = false
+  retry                     = local.foundry_operation_retry
+
+  body = {
+    properties = {
+      category      = "AppInsights"
+      target        = azurerm_application_insights.this.id
+      authType      = "ApiKey"
+      isSharedToAll = true
+      credentials   = { key = azurerm_application_insights.this.connection_string }
+      metadata = {
+        ApiType    = "Azure"
+        ResourceId = azurerm_application_insights.this.id
+      }
+    }
+  }
+}
+
 # An existing account must already have the models this deployment uses; a missing one stops the plan here.
 data "azapi_resource" "existing_model_deployment" {
   for_each = local.create_foundry ? toset([]) : toset(compact(concat(

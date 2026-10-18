@@ -62,6 +62,11 @@ output "connection_suffix" {
   value       = local.connection_suffix
 }
 
+output "trace_application_insights_id" {
+  description = "The Application Insights that receives the agent's traces: Foundry traces every project to the account's."
+  value       = length(local.account_appinsights_ids) > 0 ? local.account_appinsights_ids[0] : azurerm_application_insights.this.id
+}
+
 output "model_search_deployments" {
   description = "Extra chat model deployments for the optimizer's model selection (comma-separated)."
   value       = join(",", keys(var.model_search_deployments))

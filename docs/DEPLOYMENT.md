@@ -139,6 +139,9 @@ resource group, point the deployment at them instead:
   `Set-FabricCapacityState.ps1` pauses it for everyone who uses it.
 - **Everything else** (Azure AI Search, registry, Cosmos DB, Container Apps, Application Insights, Entra apps) is
   created in this deployment's resource group as usual.
+- **Traces:** Foundry sends every project's traces to the Application Insights connected to the account, so the
+  agent's traces, Insights and trace evaluations use the account's Application Insights. The deployment gives its
+  project read access there (or, if the account has none, connects its own).
 - **Removing** the deployment deletes its project, guardrail policy, role assignments and Fabric workspace from the
   shared resources and never deletes the account or the capacity.
 

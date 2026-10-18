@@ -1000,7 +1000,12 @@ for example from a shared resource group:
   created in the account's region; the operator needs Owner or User Access Administrator on the account for the role
   assignments (project identity as **Foundry User**, Azure AI Search identity as **Cognitive Services User**);
 - the agent's own guardrail still applies through the agent definition; the existing deployments keep their own
-  content filters.
+  content filters;
+- **traces:** Foundry sends every project's traces to the Application Insights connected to the account, so this
+  project's traces land in the account's Application Insights (Terraform finds it from the account's AppInsights
+  connection). The project identity gets **Log Analytics Reader**, **Monitoring Data Reader** and **Monitoring
+  Reader** there, so Insights and trace evaluations can read them; an account without one gets this deployment's
+  Application Insights as its connection.
 
 **Option: reuse an existing Fabric capacity** (`-ExistingFabricCapacityId`, Terraform `existing_fabric_capacity_id`):
 no capacity is created; the deployment's **own workspace** (lakehouse, notebooks, Portfolio Analyst data agent) goes

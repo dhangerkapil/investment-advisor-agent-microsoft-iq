@@ -12,6 +12,11 @@ locals {
   # Project connection names are unique across a Foundry account, not per project: in a shared account each
   # deployment's connections carry its own suffix. An account the deployment created keeps the plain names.
   connection_suffix = local.create_foundry ? "" : "-${local.func_name}"
+  # The Application Insights connected to an existing account, which receives every one of its projects' traces.
+  account_appinsights_ids = local.create_foundry ? [] : [
+    for target in try(data.azapi_resource_list.existing_foundry_connections[0].output.appinsights, []) : target
+    if target != null && target != ""
+  ]
   # The endpoint host is the account's custom subdomain: the account name for an account created here.
   foundry_subdomain = local.create_foundry ? local.foundry_name : data.azapi_resource.existing_foundry[0].output.properties.customSubDomainName
   foundry_location  = local.create_foundry ? azurerm_resource_group.this.location : data.azapi_resource.existing_foundry[0].location

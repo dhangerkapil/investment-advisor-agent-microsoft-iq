@@ -110,7 +110,8 @@ memorize the test set (absolute dates, test answers, staff names). See [QUALITY-
   Apps, Application Insights and the Entra app registrations.
 - **Reuse an existing Foundry account** (`-ExistingFoundryAccountId`): the deployment creates only its own project and
   its own guardrail policy in that account and uses the account's existing model deployments `gpt-5.6-luna`,
-  `gpt-5.5` and `text-embedding-3-large`.
+  `gpt-5.5` and `text-embedding-3-large`. Foundry traces every project to the account's Application Insights, so the
+  project gets read access there for Insights and trace evaluations.
 - **Reuse an existing Fabric capacity** (`-ExistingFabricCapacityId`): the deployment creates its own workspace on that
   capacity.
 - **Teardown** (`scripts/Remove-AdvisorDemo.ps1`) removes what the deployment created and never deletes a reused
