@@ -1,0 +1,483 @@
+from __future__ import annotations
+
+import json
+import re
+from urllib.parse import urlsplit
+from uuid import uuid4
+
+from ag_ui.core import (
+    BaseEvent,
+    CustomEvent,
+    TextMessageContentEvent,
+    TextMessageEndEvent,
+    TextMessageStartEvent,
+    ToolCallArgsEvent,
+    ToolCallEndEvent,
+    ToolCallResultEvent,
+    ToolCallStartEvent,
+)
+from fastapi import HTTPException
+
+from ..execution import TIMING_KEY, tool_output_failed, unwrap_tool_output
+from ..progress import SOURCE_SEARCH_PREFIX, SearchSource
+from .models import RunRecord, ToolActivity
+from .references import INSPECT_TOOL, VerifiedPages, references_from_text
+from .store import now
+
+SKILL_TOOLS = {"load_skill", "read_skill_resource", "run_skill_script"}
+APPROVAL_ID = re.compile(r"[\x21-\x7E]{1,256}")
+REJECTED = "tool call invocation was rejected by user"
+DURABLE_PACK = "run_durable_meeting_pack"
+DURABLE_STOP = (
+    "The request ended before the durable meeting pack finished (in the crash test, the agent process stops here). "
+    "Phases that finished are checkpointed in the Foundry state store: select New session and ask to resume the "
+    "durable meeting pack."
+)
+
+
+def timed_name(output: object) -> str | None:
+    """The tool name in the hosted runtime's timing envelope, if the output has one."""
+    value = output
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+    timing = value.get(TIMING_KEY) if isinstance(value, dict) else None
+    name = timing.get("name") if isinstance(timing, dict) else None
+    return name[:256] if isinstance(name, str) and name else None
+
+
+# Harness tools that call Work IQ themselves, out of the model's sight, and what the harness then does.
+HARNESS_WORKIQ_TOOLS = {
+    "inspect_document": "page matched by the harness",
+    "read_chart": "chart read by the harness's own model",
+}
+
+
+def tool_json(output: object, depth: int = 0) -> dict | None:
+    """A tool's JSON object result: from JSON text, an object, or text content blocks."""
+    if depth > 3:
+        return None
+    if isinstance(output, dict):
+        return output
+    if isinstance(output, str):
+        try:
+            return tool_json(json.loads(output), depth + 1)
+        except json.JSONDecodeError:
+            return None
+    if isinstance(output, list):
+        for block in output:
+            if isinstance(block, dict) and block.get("type") == "text":
+                value = tool_json(block.get("text"), depth + 1)
+                if value is not None:
+                    return value
+    return None
+
+
+def duration_text(milliseconds: object) -> str:
+    if not isinstance(milliseconds, int) or isinstance(milliseconds, bool) or milliseconds < 0:
+        return ""
+    return f"{milliseconds} ms" if milliseconds < 1000 else f"{milliseconds / 1000:.1f}s"
+
+
+def harness_detail(name: str, output: object) -> str | None:
+    """For the X-ray: the Work IQ calls a harness tool made inside it, then what the harness itself did."""
+    action = HARNESS_WORKIQ_TOOLS.get(name)
+    value = tool_json(output)
+    if action is None or value is None:
+        return None
+    calls = [
+        call for call in value.get("workiq_calls") or []
+        if isinstance(call, dict) and isinstance(call.get("tool"), str) and call["tool"].isidentifier()
+    ]
+    if calls:
+        made = " · ".join(f"{call['tool'][:20]} {duration_text(call.get('ms'))}".strip() for call in calls[:6])
+        inside = f"Inside: Work IQ {made}, as you"
+    elif value.get("reused_download") is True:
+        inside = "Inside: the file Work IQ downloaded earlier in this turn, as you"
+    else:
+        inside = "Inside: Work IQ fetch and fetch_blob, as you"
+    model = value.get("model_call")
+    if isinstance(model, dict) and isinstance(model.get("deployment"), str):
+        took = duration_text(model.get("ms"))
+        action = f"chart read by {model['deployment'][:40]} in Foundry" + (f", {took}" if took else "")
+    return f"{inside} · {action}"[:300]
+
+
+def iq_detail(name: str, output: object) -> str | None:
+    """For the X-ray: what a Foundry IQ, Web IQ, Fabric IQ or durable-pack call did, in one line."""
+    value = tool_json(output)
+    if value is None:
+        return None
+    status = value.get("status")
+    if name in ("search_public_web", "read_public_web_page"):
+        if status == "WEB_QUERY_BLOCKED":
+            reason = str(value.get("reason", "")).split(" because ", 1)[-1].rstrip(".")
+            return f"Web IQ: blocked at the boundary before sending, {reason}"[:300]
+        if status == "WEB_UNAVAILABLE":
+            return "Web IQ: unavailable; the public web was not checked"
+        if name == "read_public_web_page":
+            return "Web IQ: public page read, outside the Microsoft 365 and Azure boundary"
+        results = value.get("results") if isinstance(value.get("results"), list) else []
+        return f"Web IQ {value.get('kind', 'news')}: {len(results)} public result(s), outside the Microsoft 365 boundary"
+    if name == "search_firm_knowledge":
+        if status == "FIRM_KNOWLEDGE_UNAVAILABLE":
+            return "Foundry IQ: unavailable; the firm library was not checked"
+        passages = value.get("passages") if isinstance(value.get("passages"), list) else []
+        codes = list(dict.fromkeys(str(p.get("document", "")).split(" ", 1)[0] for p in passages
+                                   if isinstance(p, dict) and p.get("document")))
+        return (f"Foundry IQ knowledge base: {len(passages)} passage(s)" + (f" from {', '.join(codes[:5])}" if codes else "")
+                + ", as the project's managed identity")[:300]
+    if name == "query_portfolio_data" and status == "FABRIC_CONSENT_REQUIRED":
+        return "Fabric IQ: your one-time consent is needed; select Authorize in the banner"
+    if name == "delegate_to_work_iq":
+        if status == "WORKIQ_CHAT_CONSENT_REQUIRED":
+            return "Work IQ Chat (A2A): your one-time consent is needed; select Authorize in the banner"
+        if status == "WORKIQ_CHAT_UNAVAILABLE":
+            return "Work IQ Chat (A2A): unavailable; answered with the Work IQ tools instead"
+        task = str(value.get("task_id") or "")[:8]
+        took = duration_text(value.get("duration_ms"))
+        return (f"Work IQ Chat over A2A: task {task} {value.get('state', status)}" + (f" in {took}" if took else "")
+                + ", answered by Work IQ's own agent as you")[:300]
+    if name == "run_durable_meeting_pack":
+        report = value.get("durability") if isinstance(value.get("durability"), dict) else {}
+        marker = report.get("progress_marker") if isinstance(report.get("progress_marker"), dict) else {}
+        counts = [len(report.get(k) or []) for k in ("restored_checkpoints", "reconciled_checkpoints",
+                                                       "executed_in_this_process")]
+        return (f"Attempt {value.get('attempt')}: restored {counts[0]} checkpoint(s), reused {counts[1]} written "
+                f"before a stop, ran {counts[2]} phase(s); progress marker {marker.get('next_wave')}")[:300]
+    return None
+
+
+class ResponseEvents:
+    def __init__(self, record: RunRecord, project_endpoint: str, *, continuation: bool = False) -> None:
+        self.record = record
+        self.project_host = urlsplit(project_endpoint).hostname
+        # A continuation answers an approval: the approved tool's call belongs to the previous response.
+        self.continuation = continuation
+        self.text: dict[str, str] = {}
+        self.ended_messages: set[str] = set()
+        self.calls: dict[str, ToolActivity] = {}
+        self.arguments: dict[str, str] = {}
+        self.ended_arguments: set[str] = set()
+        self.returned_calls: set[str] = set()
+        self.item_calls: dict[str, str] = {}
+        self.approvals: set[str] = set()
+        self.verified = VerifiedPages()
+        self.terminal = False
+
+    def activity_event(self) -> CustomEvent:
+        return CustomEvent(name="workiq.activity", value=self.record.model_dump(mode="json"))
+
+    def start_text(self, identifier: str) -> list[BaseEvent]:
+        if identifier in self.text:
+            return []
+        self.text[identifier] = ""
+        self.record.assistant_message_ids.append(identifier)
+        self.record.stage = "answering"
+        return [
+            self.activity_event(), TextMessageStartEvent(message_id=identifier, role="assistant"),
+        ]
+
+    def finish_text(self, identifier: str) -> list[BaseEvent]:
+        if identifier in self.ended_messages:
+            return []
+        self.ended_messages.add(identifier)
+        return [TextMessageEndEvent(message_id=identifier)]
+
+    def start_call(self, item: dict) -> list[BaseEvent]:
+        identifier, name = item.get("call_id"), item.get("name")
+        if not isinstance(identifier, str) or not isinstance(name, str):
+            raise HTTPException(status_code=502, detail="Foundry returned an invalid tool call.")
+        if identifier in self.calls:
+            return []
+        source: SearchSource | None = None
+        if name == f"{SOURCE_SEARCH_PREFIX}Email":
+            source = "Email"
+        elif name == f"{SOURCE_SEARCH_PREFIX}OneDriveAndSharePoint":
+            source = "OneDriveAndSharePoint"
+        activity = ToolActivity(
+            call_id=identifier, name=name, started_at=now(),
+            kind="skill" if name in SKILL_TOOLS else "tool", source=source,
+        )
+        self.record.stage = (
+            "searching" if source or name == "workiq___retrieve"
+            else "loading_skill" if activity.kind == "skill" else "running_tool"
+        )
+        self.calls[identifier] = activity
+        if isinstance(item.get("id"), str):
+            self.item_calls[item["id"]] = identifier
+        self.arguments[identifier] = ""
+        self.record.activity.append(activity)
+        return [
+            ToolCallStartEvent(tool_call_id=identifier, tool_call_name=name),
+            self.activity_event(),
+        ]
+
+    def finish_arguments(self, identifier: str, arguments: str) -> list[BaseEvent]:
+        if identifier in self.ended_arguments:
+            return []
+        events: list[BaseEvent] = []
+        if not self.arguments.get(identifier) and arguments:
+            events.append(ToolCallArgsEvent(tool_call_id=identifier, delta=arguments))
+            self.arguments[identifier] = arguments
+        activity = self.calls[identifier]
+        if activity.kind == "skill" or activity.source is not None:
+            try:
+                values = json.loads(arguments)
+            except json.JSONDecodeError as error:
+                raise HTTPException(
+                    status_code=502, detail="Foundry returned invalid activity arguments.",
+                ) from error
+            if activity.source is not None:
+                parent = values.get("parent_call_id") if isinstance(values, dict) else None
+                if (
+                    not isinstance(values, dict) or set(values) != {"source", "parent_call_id"}
+                    or values["source"] != activity.source or not isinstance(parent, str)
+                    or parent not in self.calls
+                    or self.calls[parent].name != "workiq___retrieve"
+                ):
+                    raise HTTPException(
+                        status_code=502, detail="Foundry returned invalid source search metadata.",
+                    )
+                activity.parent_call_id = parent
+            elif isinstance(values, dict):
+                name = values.get("skill_name") or values.get("skill") or values.get("name")
+                if isinstance(name, str) and name:
+                    activity.skill = name[:256]
+        self.ended_arguments.add(identifier)
+        events.extend([ToolCallEndEvent(tool_call_id=identifier), self.activity_event()])
+        return events
+
+    def finish_call(self, item: dict) -> list[BaseEvent]:
+        identifier = item.get("call_id")
+        events: list[BaseEvent] = []
+        if identifier not in self.calls:
+            if not self.continuation or not isinstance(identifier, str) or not identifier:
+                raise HTTPException(status_code=502, detail="Foundry returned a result for an unknown tool call.")
+            # The approved tool runs now; its call was in the response that asked for approval.
+            rejected = isinstance(item.get("output"), str) and REJECTED in item["output"].lower()
+            events.extend(self.start_call({
+                "call_id": identifier,
+                "name": timed_name(item.get("output")) or ("rejected_action" if rejected else "approved_action"),
+            }))
+            events.extend(self.finish_arguments(identifier, ""))
+        if identifier in self.returned_calls:
+            return events
+        self.returned_calls.add(identifier)
+        activity = self.calls[identifier]
+        try:
+            output, timing = unwrap_tool_output(
+                item.get("output"), call_id=identifier, name=activity.name,
+            )
+        except ValueError as error:
+            raise HTTPException(status_code=502, detail="Foundry returned invalid tool timing.") from error
+        failed = tool_output_failed(output, skill=activity.kind == "skill") or bool(timing and timing.failed)
+        activity.status = "failed" if failed else "completed"
+        # A skill's instructions can quote the rejection text; only a tool result can be a rejection.
+        if activity.kind != "skill" and isinstance(output, str) and REJECTED in output.lower():
+            activity.status = "cancelled"
+        if activity.source is not None:
+            if (
+                timing is None or not isinstance(output, dict) or set(output) != {"status"}
+                or output["status"] not in {"completed", "failed", "cancelled"}
+                or timing.failed != (output["status"] != "completed")
+            ):
+                raise HTTPException(status_code=502, detail="Foundry returned invalid source search status.")
+            activity.status = output["status"]
+        if activity.name == INSPECT_TOOL and not failed:
+            # Only a real inspect_document result can mark a cited page as verified.
+            self.verified.record(output)
+        if not failed:
+            activity.detail = harness_detail(activity.name, output) or iq_detail(activity.name, output)
+        if timing:
+            activity.started_at = timing.started_at.isoformat()
+            activity.duration_ms = timing.duration_ms
+            activity.timing_source = "runtime"
+        if not any(call.status == "running" for call in self.record.activity):
+            self.record.stage = "planning"
+        return [
+            *events,
+            ToolCallResultEvent(
+                message_id=f"tool-{uuid4()}", tool_call_id=identifier,
+                content=json.dumps({"status": activity.status}),
+            ),
+            self.activity_event(),
+            *self.tool_consent(activity.name, output),
+        ]
+
+    def tool_consent(self, name: str, output: object) -> list[BaseEvent]:
+        """The consent banner for a link a tool returned: Fabric IQ and Work IQ Chat (A2A) are called inside a tool,
+        so Foundry can't raise their consent requests, and the model must not be trusted to copy a long link intact."""
+        value = tool_json(output)
+        server = {("query_portfolio_data", "FABRIC_CONSENT_REQUIRED"): "fabric_portfolio",
+                  ("delegate_to_work_iq", "WORKIQ_CHAT_CONSENT_REQUIRED"): "workiq_chat_a2a"}.get(
+            (name, value.get("status") if value else None))
+        if value is None or server is None:
+            return []
+        try:
+            return [self.consent_event({"consent_link": value.get("consent_link"), "server_label": server})]
+        except HTTPException:
+            return []
+
+    def approval_event(self, item: dict) -> list[BaseEvent]:
+        """An approval-gated tool call waiting for the advisor: show what it will do, with Approve and Reject."""
+        identifier = item.get("id")
+        if not isinstance(identifier, str) or not APPROVAL_ID.fullmatch(identifier):
+            raise HTTPException(status_code=502, detail="Foundry returned an invalid approval request.")
+        if identifier in self.approvals:
+            return []
+        self.approvals.add(identifier)
+        name = item.get("name") if isinstance(item.get("name"), str) else None
+        arguments: object = item.get("arguments")
+        if isinstance(arguments, str):
+            try:
+                arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                arguments = {}
+        values = {
+            key[:64]: value[:4000] for key, value in arguments.items()
+            if isinstance(key, str) and isinstance(value, str)
+        } if isinstance(arguments, dict) else {}
+        for activity in self.record.activity:
+            if activity.status == "running" and activity.name == name:
+                activity.status = "awaiting_approval"
+        server = item.get("server_label")
+        return [
+            CustomEvent(name="workiq.approval", value={
+                "id": identifier, "name": name[:256] if name else None,
+                "server": server[:256] if isinstance(server, str) else None,
+                "arguments": values, "response_id": self.record.response_id,
+            }),
+            self.activity_event(),
+        ]
+
+    def consent_event(self, item: dict) -> CustomEvent:
+        candidates = [item.get(key) for key in ("consent_link", "consent_url", "url", "authorization_url")]
+        for value in candidates:
+            if not isinstance(value, str):
+                continue
+            parsed = urlsplit(value)
+            hostname = parsed.hostname or ""
+            if (
+                parsed.scheme == "https" and not parsed.username and not parsed.password
+                and not any(ord(character) < 32 for character in value)
+                and (
+                    hostname in {"login.microsoftonline.com", "consent.azure-apim.net", self.project_host}
+                    or hostname.endswith(".consent.azure-apim.net")
+                )
+            ):
+                return CustomEvent(
+                    name="workiq.consent",
+                    value={
+                        "url": value, "response_id": self.record.response_id,
+                        "server": item.get("server_label") if isinstance(item.get("server_label"), str) else None,
+                    },
+                )
+        raise HTTPException(
+            status_code=502, detail="Foundry requested consent without a supported HTTPS link.",
+        )
+
+    def completed_item(self, item: dict) -> list[BaseEvent]:
+        kind = item.get("type")
+        events: list[BaseEvent] = []
+        if kind == "message" and item.get("role") == "assistant":
+            identifier = item["id"]
+            content = item.get("content", [])
+            text = "".join(
+                block.get("refusal", "") if block.get("type") == "refusal" else block.get("text", "")
+                for block in content if block.get("type") in ("output_text", "refusal")
+            )
+            if identifier not in self.text and text:
+                events.extend(self.start_text(identifier))
+                self.text[identifier] = text
+                events.append(TextMessageContentEvent(message_id=identifier, delta=text))
+            if identifier in self.text:
+                events.extend(self.finish_text(identifier))
+                annotations = [
+                    annotation for block in content for annotation in block.get("annotations", [])
+                ]
+                references = references_from_text(
+                    text or self.text[identifier], annotations, verified=self.verified,
+                )
+                if references:
+                    events.append(CustomEvent(
+                        name="workiq.references",
+                        value={
+                            "message_id": identifier,
+                            "references": [reference.model_dump(mode="json") for reference in references],
+                        },
+                    ))
+        elif kind == "function_call":
+            events.extend(self.start_call(item))
+            events.extend(self.finish_arguments(item["call_id"], item.get("arguments", "{}")))
+        elif kind == "function_call_output":
+            events.extend(self.finish_call(item))
+        elif kind == "oauth_consent_request":
+            events.append(self.consent_event(item))
+        elif kind in ("mcp_approval_request", "function_approval_request"):
+            events.extend(self.approval_event(item))
+        return events
+
+    def consume(self, event: dict) -> list[BaseEvent]:
+        kind = event["type"]
+        if kind == "response.created":
+            self.record.response_id = event["response"]["id"]
+            self.record.stage = "planning"
+            return [self.activity_event()]
+        if kind in ("response.output_text.delta", "response.refusal.delta"):
+            identifier, delta = event["item_id"], event["delta"]
+            events = self.start_text(identifier)
+            self.text[identifier] += delta
+            events.append(TextMessageContentEvent(message_id=identifier, delta=delta))
+            return events
+        if kind == "response.output_item.added" and event["item"].get("type") == "function_call":
+            return self.start_call(event["item"])
+        if kind in ("response.function_call_arguments.delta", "response.function_call_arguments.done"):
+            identifier = event.get("call_id")
+            item_id = event.get("item_id")
+            if not isinstance(identifier, str):
+                identifier = self.item_calls.get(item_id) if isinstance(item_id, str) else None
+            if not isinstance(identifier, str):
+                raise HTTPException(status_code=502, detail="Foundry returned arguments for an unknown tool.")
+            if kind == "response.function_call_arguments.delta":
+                self.arguments[identifier] += event["delta"]
+                return [ToolCallArgsEvent(tool_call_id=identifier, delta=event["delta"])]
+            return self.finish_arguments(identifier, event["arguments"])
+        if kind == "response.output_item.done":
+            return self.completed_item(event["item"])
+        if kind in ("response.completed", "response.incomplete", "response.failed"):
+            response = event["response"]
+            self.record.response_id = response["id"]
+            events = [
+                mapped for item in response.get("output", []) for mapped in self.completed_item(item)
+            ]
+            if response.get("error"):
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Hosted agent failed ({response['error'].get('code', 'server_error')}).",
+                )
+            status = response.get("status")
+            if status not in ("completed", "incomplete"):
+                raise HTTPException(status_code=502, detail="Hosted agent did not complete its response.")
+            self.record.status = status
+            self.terminal = True
+            events.append(self.activity_event())
+            return events
+        if kind == "error":
+            raise HTTPException(status_code=502, detail="Foundry returned a streaming error.")
+        return []
+
+    def stopped_durable_pack(self) -> bool:
+        """Whether the request ended while the durable meeting pack was still running, as in the crash test."""
+        return any(
+            activity.name == DURABLE_PACK and activity.status == "running" for activity in self.record.activity
+        )
+
+    def interrupt(self, failed: bool, stopped: bool = False) -> None:
+        """End the run; with stopped, unfinished calls were cut off by a stopped process, not failed by themselves."""
+        self.record.status = "failed" if failed else "cancelled"
+        for activity in self.record.activity:
+            if activity.status == "running":
+                activity.status = "failed" if failed and not stopped else "cancelled"
