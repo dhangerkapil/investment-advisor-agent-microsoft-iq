@@ -257,6 +257,7 @@ IQ: Work IQ, Fabric IQ, Foundry IQ (document code and section) and Web IQ (publi
 | New mail or files are not found yet | Work IQ indexes new mail within minutes and new SharePoint files can take longer; publish content a day ahead |
 | Work IQ policy changes don't apply | They can take a while; the governance probe in the demo shows the policy that is in force |
 | The Platform step stops with "the plan changes or destroys existing resources" | Review the plan, then rerun the step; it applies changes only after you allow them |
+| The chat app shows "Foundry returned invalid activity arguments" | An older UI image: the preview hosting adapter (`agent-framework-foundry-hosting` 1.0.0b261015) sends each tool call's arguments twice (`{...}{...}`); the current UI keeps one copy. Redeploy the UI (`-Step Ui`, or `.\scripts\Publish-UiInstance.ps1 -AgentName <agent>` for an extra UI) |
 
 ## Remove everything
 

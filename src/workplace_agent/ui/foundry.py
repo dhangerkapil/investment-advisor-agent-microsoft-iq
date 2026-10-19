@@ -12,6 +12,7 @@ from pydantic import ValidationError
 from .. import pdfpage
 
 from ..execution import unwrap_tool_output
+from ..tool_arguments import call_arguments
 from .config import UIConfig
 from .models import Reference, RunRecord
 from .payloads import payload_text
@@ -178,7 +179,7 @@ class FoundryGateway:
         ]
         if len(results) > 1 or (results and "output" not in results[0]):
             raise HTTPException(status_code=502, detail="Foundry returned ambiguous tool results.")
-        inputs, input_truncated = payload_text(calls[0]["arguments"])
+        inputs, input_truncated = payload_text(call_arguments(calls[0]["arguments"]))
         outputs, output_truncated = None, False
         if results:
             name = calls[0].get("name")

@@ -37,6 +37,9 @@ from azure.identity import AzureCliCredential
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "hydration"))
 from story_dates import shift_text  # noqa: E402 - hosted cases follow STORY_MEETING_DATE
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+from workplace_agent.tool_arguments import call_arguments  # noqa: E402 - stdlib only
+
 AGENT = os.environ.get("ADVISOR_AGENT_NAME", "advisor-harness")
 RUBRIC = "advisor-harness-quality"
 WORK = Path(os.environ.get("ADVISOR_WORK_DIR", "."))
@@ -266,7 +269,7 @@ def turn_item(name: str, data: dict, instructions: str, definitions: list) -> di
         kind = item.get("type")
         if kind == "function_call":
             try:
-                arguments = json.loads(item.get("arguments") or "{}")
+                arguments = json.loads(call_arguments(item.get("arguments") or "{}"))
             except json.JSONDecodeError:
                 arguments = {"raw": item.get("arguments")}
             response.append({"role": "assistant", "content": [{

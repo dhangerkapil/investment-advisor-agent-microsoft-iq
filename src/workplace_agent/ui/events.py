@@ -20,6 +20,7 @@ from fastapi import HTTPException
 
 from ..execution import TIMING_KEY, tool_output_failed, unwrap_tool_output
 from ..progress import SOURCE_SEARCH_PREFIX, SearchSource
+from ..tool_arguments import call_arguments
 from .models import RunRecord, ToolActivity
 from .references import INSPECT_TOOL, VerifiedPages, references_from_text
 from .store import now
@@ -218,6 +219,7 @@ class ResponseEvents:
     def finish_arguments(self, identifier: str, arguments: str) -> list[BaseEvent]:
         if identifier in self.ended_arguments:
             return []
+        arguments = call_arguments(arguments)
         events: list[BaseEvent] = []
         if not self.arguments.get(identifier) and arguments:
             events.append(ToolCallArgsEvent(tool_call_id=identifier, delta=arguments))
@@ -333,7 +335,7 @@ class ResponseEvents:
         arguments: object = item.get("arguments")
         if isinstance(arguments, str):
             try:
-                arguments = json.loads(arguments)
+                arguments = json.loads(call_arguments(arguments))
             except json.JSONDecodeError:
                 arguments = {}
         values = {

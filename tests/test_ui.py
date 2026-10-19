@@ -353,6 +353,29 @@ def test_stream_maps_actual_tool_skill_and_text_without_private_reasoning() -> N
     assert adapter.terminal
 
 
+def test_stream_accepts_arguments_the_hosting_adapter_sends_twice() -> None:
+    # agent-framework-foundry-hosting 1.0.0b261015 streams the arguments, then sends them whole once more.
+    record = RunRecord(id=str(uuid4()), session_id=str(uuid4()), prompt_preview="Prepare", started_at=now())
+    adapter = ResponseEvents(record, "https://example.services.ai.azure.com/api/projects/workplace")
+    adapter.consume({
+        "type": "response.output_item.added",
+        "item": {"id": "item_1", "call_id": "call_1", "name": "load_skill", "type": "function_call"},
+    })
+    whole = '{"skill_name":"meeting-prep"}'
+    for delta in ('{"skill_', 'name":"meeting', '-prep"}', whole):
+        adapter.consume({"type": "response.function_call_arguments.delta", "item_id": "item_1", "delta": delta})
+    emitted = adapter.consume({
+        "type": "response.function_call_arguments.done", "item_id": "item_1", "arguments": whole + whole,
+    })
+    assert any(event.type == EventType.TOOL_CALL_END for event in emitted)
+    assert record.activity[0].skill == "meeting-prep"
+    with pytest.raises(HTTPException) as error:
+        adapter.completed_item({
+            "type": "function_call", "name": "load_skill", "call_id": "call_2", "arguments": '{"a":1}{"b":2}',
+        })
+    assert error.value.detail == "Foundry returned invalid activity arguments."
+
+
 def test_tool_result_error_is_not_reported_as_success_or_replayed() -> None:
     record = RunRecord(id=str(uuid4()), session_id=str(uuid4()), prompt_preview="Hello", started_at=now())
     adapter = ResponseEvents(record, "https://example.services.ai.azure.com/api/projects/workplace")
@@ -1413,6 +1436,13 @@ def test_approval_request_is_offered_to_the_advisor_not_rejected() -> None:
     assert adapter.completed_item(request) == []
     with pytest.raises(HTTPException):
         adapter.completed_item({**request, "id": "has space"})
+    # The preview hosting adapter can repeat the arguments; the advisor still sees the exact email.
+    doubled = {**request, "id": "apr_2", "arguments": request["arguments"] + request["arguments"]}
+    [again] = [
+        event for event in adapter.completed_item(doubled)
+        if event.type == EventType.CUSTOM and event.name == "workiq.approval"
+    ]
+    assert again.value["arguments"]["subject"] == "Thursday"
 
 
 def test_only_an_approval_continuation_accepts_the_approved_call_output() -> None:
