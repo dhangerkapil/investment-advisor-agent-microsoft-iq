@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ActivitySchema, ApprovalSchema, DocumentPageSchema, MessageBatcher, ReferenceSchema, SourceViewSchema, approvalTitle, citedPage, displayText, evidencePages, groundingSummary, locationLabel, mergeRun, mergeStreamMessages, protocolMessages, toolDuration, type Run } from "./models";
+import { ActivitySchema, ApprovalSchema, DocumentPageSchema, MessageBatcher, ReferenceSchema, SourceViewSchema, approvalTitle, citedPage, displayText, evidencePages, fileHome, groundingSummary, locationLabel, mergeRun, mergeStreamMessages, protocolMessages, toolDuration, type Run } from "./models";
 
 describe("reference presentation", () => {
   it("keeps normal answer text and hides machine metadata, including unfinished streaming blocks", () => {
@@ -11,12 +11,29 @@ describe("reference presentation", () => {
 
   it("labels reported and harness-verified positions and rejects unsafe links", () => {
     const reference = ReferenceSchema.parse({ title: "Plan", url: "https://contoso.sharepoint.com/plan", slide: 4 });
-    expect(locationLabel(reference)).toBe("Reported slide 4");
+    expect(locationLabel(reference)).toBe("SharePoint · Reported slide 4");
     expect(reference.location_verified).toBe(false);
     const verified = ReferenceSchema.parse({ ...reference, slide: null, page: 2, location_verified: true });
-    expect(locationLabel(verified)).toBe("Verified page 2");
+    expect(locationLabel(verified)).toBe("SharePoint · Verified page 2");
     expect(ReferenceSchema.safeParse({ ...reference, location_verified: "yes" }).success).toBe(false);
     expect(ReferenceSchema.safeParse({ ...reference, url: "javascript:alert(1)" }).success).toBe(false);
+  });
+
+  it("names where a file lives: the user's OneDrive or a SharePoint site", () => {
+    const onedrive = ReferenceSchema.parse({
+      title: "Overview", url: "https://contoso-my.sharepoint.com/personal/adele_contoso_com/Documents/Overview.pdf",
+    });
+    expect(fileHome(onedrive)).toBe("OneDrive");
+    expect(locationLabel(onedrive)).toBe("OneDrive");
+    expect(locationLabel({ ...onedrive, page: 3, location_verified: true })).toBe("OneDrive · Verified page 3");
+    const site = ReferenceSchema.parse({ title: "IPS v2", url: "https://contoso.sharepoint.com/sites/clients/IPS.docx" });
+    expect(fileHome(site)).toBe("SharePoint");
+    const other = ReferenceSchema.parse({ title: "Note", url: "https://files.contoso.com/note.pdf" });
+    expect(fileHome(other)).toBeNull();
+    expect(locationLabel(other)).toBe("File reference");
+    expect(groundingSummary([onedrive, site, { ...site, url: "https://contoso.sharepoint.com/sites/clients/n.docx" }]))
+      .toBe("3 files (1 in OneDrive, 2 in SharePoint)");
+    expect(groundingSummary([onedrive, other])).toBe("2 files (1 in OneDrive)");
   });
 
   it("labels Microsoft 365 sources by kind and defaults older references to files", () => {
@@ -50,7 +67,7 @@ describe("reference presentation", () => {
     const email = ReferenceSchema.parse({ title: "Agenda", url: "https://outlook.office365.com/owa/1", kind: "email" });
     const meeting = ReferenceSchema.parse({ title: "Review", url: "https://outlook.office365.com/cal/1", kind: "event" });
     expect(groundingSummary([email, { ...email, url: "https://outlook.office365.com/owa/2" }, meeting, file,
-      { ...file, page: 2 }])).toBe("2 emails · 1 meeting · 1 file");
+      { ...file, page: 2 }])).toBe("2 emails · 1 meeting · 1 file in SharePoint");
     expect(groundingSummary([])).toBeNull();
   });
 });

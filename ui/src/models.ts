@@ -217,14 +217,26 @@ export function displayText(content: string): string {
   return content.replace(/```workiq_references\b[\s\S]*?(?:```|$)/g, "").trim();
 }
 
+/** Where a cited file lives: OneDrive for Business (a "-my" host) or a SharePoint site; null for other links. */
+export function fileHome(reference: FileReference): "OneDrive" | "SharePoint" | null {
+  if (reference.kind !== "file") return null;
+  let host: string;
+  try { host = new URL(reference.url).hostname.toLowerCase(); } catch { return null; }
+  if (/-my\.sharepoint(?:-df)?\.com$/.test(host)) return "OneDrive";
+  if (/\.sharepoint(?:-df)?\.com$/.test(host)) return "SharePoint";
+  return null;
+}
+
 export function locationLabel(reference: FileReference): string {
   if (reference.kind === "email") return "Email";
   if (reference.kind === "event") return "Meeting";
   if (reference.kind === "chat") return "Teams message";
+  const home = fileHome(reference);
   const kind = reference.location_verified ? "Verified" : "Reported";
-  if (reference.slide !== null) return `${kind} slide ${reference.slide}`;
-  if (reference.page !== null) return `${kind} page ${reference.page}`;
-  return "File reference";
+  const position = reference.slide !== null ? `${kind} slide ${reference.slide}`
+    : reference.page !== null ? `${kind} page ${reference.page}` : null;
+  if (position) return home ? `${home} · ${position}` : position;
+  return home ?? "File reference";
 }
 
 /** The page a file preview opens at: the cited slide or page (a converted deck has one page per slide), else 1. */
@@ -249,16 +261,28 @@ const sourceLabels: Record<FileReference["kind"], [string, string]> = {
   file: ["file", "files"],
 };
 
-/** "2 emails · 1 meeting · 3 files": how many distinct Microsoft 365 items an answer cites, by kind. */
+/** "2 emails · 1 meeting · 3 files (2 in OneDrive, 1 in SharePoint)": distinct Microsoft 365 items an answer cites. */
 export function groundingSummary(references: FileReference[]): string | null {
   const items = new Map<FileReference["kind"], Set<string>>();
+  const homes = new Map<string, "OneDrive" | "SharePoint" | null>();
   for (const reference of references) {
     items.set(reference.kind, (items.get(reference.kind) ?? new Set<string>()).add(reference.url));
+    if (reference.kind === "file") homes.set(reference.url, fileHome(reference));
   }
   const parts = (["email", "event", "chat", "file"] as const).flatMap((kind) => {
     const count = items.get(kind)?.size ?? 0;
     return count ? [`${count} ${sourceLabels[kind][count === 1 ? 0 : 1]}`] : [];
   });
+  const files = items.get("file")?.size ?? 0;
+  const where = (["OneDrive", "SharePoint"] as const)
+    .map((home) => [home, [...homes.values()].filter((value) => value === home).length] as const)
+    .filter(([, count]) => count > 0);
+  if (files && where.length) {
+    const last = parts.length - 1;
+    parts[last] = where.length === 1 && where[0][1] === files
+      ? `${parts[last]} in ${where[0][0]}`
+      : `${parts[last]} (${where.map(([home, count]) => `${count} in ${home}`).join(", ")})`;
+  }
   return parts.length ? parts.join(" · ") : null;
 }
 
