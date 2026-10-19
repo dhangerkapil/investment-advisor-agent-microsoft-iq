@@ -12,18 +12,21 @@
     start a new conversation (marked "NEW:") and resume the run from the state store.
     The draft segment asks for a follow-up email, then answers the approval request: it approves (a real
     draft lands in the advisor's Outlook Drafts; delete it before the session) or, with -RejectDraft, rejects.
-    The firm, web and workiq segments need an agent with Foundry IQ, Web IQ and Work IQ Chat (A2A) tools.
+    The firm, web, fouriqs, eachiq and workiq segments need an agent with Foundry IQ, Web IQ and Work IQ Chat (A2A)
+    tools. The demo's order for such an agent: prep (the brief, all four IQs), then fouriqs (one question that needs
+    all four IQs at once) and eachiq (one question per IQ, each in a new conversation, Work IQ first with every Work
+    IQ feature), then web (public news and the boundary guard), meeting, chart, graph and workiq.
 
 .EXAMPLE
     .\scripts\Invoke-DemoRehearsal.ps1
     .\scripts\Invoke-DemoRehearsal.ps1 -Segment prep, chart
     .\scripts\Invoke-DemoRehearsal.ps1 -Segment draft -RejectDraft
-    .\scripts\Invoke-DemoRehearsal.ps1 -AgentName investment-advisor-agent -Segment prep, firm, web, workiq
+    .\scripts\Invoke-DemoRehearsal.ps1 -AgentName investment-advisor-agent -Segment prep, fouriqs, eachiq, web, meeting, chart, graph, workiq
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('prep', 'chart', 'graph', 'governance', 'draft', 'durability', 'changed', 'fabric', 'firm', 'web', 'workiq')]
-    [string[]]$Segment = @('prep', 'chart', 'graph', 'governance', 'draft', 'durability'),
+    [ValidateSet('prep', 'fouriqs', 'eachiq', 'meeting', 'chart', 'graph', 'governance', 'draft', 'durability', 'changed', 'fabric', 'firm', 'web', 'workiq')]
+    [string[]]$Segment = @('prep', 'meeting', 'chart', 'graph', 'governance', 'draft', 'durability'),
     [int]$TimeoutSec = 600,
     [switch]$RejectDraft,
     # Another hosted agent in the project (such as a candidate); default: the Terraform-managed agent.
@@ -36,9 +39,16 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\Use-IsolatedAzure.ps1" -RequireLogin
 . "$PSScriptRoot\StoryDates.ps1"
 $prompts = [ordered]@{
-    prep       = @(
-        "I'm meeting Michael Scott on Thursday. Prepare me.",
-        "In Friday's Q4 portfolio review, what exactly did Michael say about his tax budget and his house? Quote the meeting transcript, and list the action items with their owners and whether each has been done since.")
+    prep       = @("I'm meeting Michael Scott on Thursday. Prepare me.")
+    # The demo's second question: all four Microsoft IQs in one answer (the app's second suggestion).
+    fouriqs    = @("Michael Scott needs `$400,000 for his home closing. Use all four Microsoft IQs: how could he fund it, and what must happen first?")
+    # One IQ at a time (the app's "One IQ at a time" row); each starts a new conversation so only that IQ is called.
+    eachiq     = @(
+        "NEW:Work IQ: everything Microsoft 365 knows about Michael Scott: mail, calendar, Friday's meeting, Teams and his files. Compare his signed IPS with the draft, read his NVDA chart, and have Work IQ's own agent list what's still open.",
+        'NEW:Fabric IQ: how has Michael Scott''s NVDA weight moved over the last month, and where are NVDA, his Information Technology weight and cash now against his limits?',
+        "NEW:Foundry IQ: what does our firm require when a client's single stock goes above its limit, and before we release a large wire? Cite each rule.",
+        "NEW:Web IQ: what's the public news on NVIDIA this week, and its latest public share price? Links for each.")
+    meeting    = @("In Friday's Q4 portfolio review, what exactly did Michael say about his tax budget and his house? Quote the meeting transcript, and list the action items with their owners and whether each has been done since.")
     chart      = @(
         "Find the chart of Michael Scott's NVDA weight against its limit. What were the high and the low since September 1, how close did it come to the limit, and where did it end?",
         "Since that chart, where does Michael's NVDA position stand now? Check the analyst's latest email against the portfolio data in Fabric, tell me whether they agree, what Michael and the team said about trimming it, and what a trim to the limit would mean.")
@@ -115,15 +125,15 @@ Write-Output ''
 Write-Output 'Summary:'
 $summary | ForEach-Object { '{0,-14} {1,-22} {2}{3}' -f $_.segment, $_.result, $_.tools, $(if ($_.consent) { '  [consent needed]' } else { '' }) } | Write-Output
 
-# Segment 2a: Work IQ (ask) should read the chart; read_chart is the harness's fallback reader.
+# The chart step: Work IQ (ask) should read the chart; read_chart is the harness's fallback reader.
 $chart = $summary | Where-Object segment -eq 'chart 1' | Select-Object -First 1
 if ($chart) {
     Write-Output ''
     if ($chart.tools -match 'read_chart') {
-        Write-Output 'Check 2a: the harness fallback (read_chart) read the chart: Work IQ ask did not return its values this time. Run the chart segment again; if it repeats, look at the workiq___ask output in the saved JSON.'
+        Write-Output 'Chart check: the harness fallback (read_chart) read the chart: Work IQ ask did not return its values this time. Run the chart segment again; if it repeats, look at the workiq___ask output in the saved JSON.'
     } elseif ($chart.tools -match 'workiq___ask') {
-        Write-Output 'Check 2a: Work IQ (workiq___ask) read the chart, and inspect_document verified the page. As intended.'
+        Write-Output 'Chart check: Work IQ (workiq___ask) read the chart, and inspect_document verified the page. As intended.'
     } else {
-        Write-Output 'Check 2a: neither workiq___ask nor read_chart ran: the answer has no chart values. Run the chart segment again.'
+        Write-Output 'Chart check: neither workiq___ask nor read_chart ran: the answer has no chart values. Run the chart segment again.'
     }
 }

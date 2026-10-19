@@ -69,6 +69,14 @@ h1 { font-size: 18px; font-weight: 600; margin: 7px 0 0; overflow-wrap: anywhere
 .suggestions { display: flex; flex-direction: column; gap: 9px; max-width: 460px; margin: auto; }
 .suggestions button { border: 1px solid #dce5ef; border-radius: 10px; color: #556c86; background: white; display: flex; justify-content: space-between; align-items: center; text-align: left; font-size: 12px; padding: 14px 15px; gap: 12px; }
 .suggestions button:hover { background: #f2f6fc; border-color: #b5cae3; }
+.one-iq { display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 8px; max-width: 460px; margin: 14px auto 0; }
+.one-iq span { width: 100%; font-size: 9px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase; color: #8291a3; }
+.one-iq button { border: 1px solid #dce5ef; border-left: 3px solid var(--iq); border-radius: 999px; background: white; color: #3c5570; font-size: 12px; padding: 7px 14px; }
+.one-iq button:hover { background: #f2f6fc; border-color: #b5cae3; border-left-color: var(--iq); }
+.one-iq .iq-work { --iq: #3f7a62; }
+.one-iq .iq-fabric { --iq: #466f91; }
+.one-iq .iq-foundry { --iq: #62559a; }
+.one-iq .iq-web { --iq: #8a6630; }
 .message { padding-bottom: 28px; font-size: 14px; line-height: 1.75; }
 .message-author { text-transform: uppercase; color: #8291a3; font-weight: 600; letter-spacing: .08em; font-size: 9px; margin-bottom: 8px; }
 .message.user .message-content { background: #edf2f8; border-radius: 10px; padding: 14px 18px; }

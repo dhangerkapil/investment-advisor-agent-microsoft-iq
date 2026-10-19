@@ -65,6 +65,19 @@ const paths: Record<IconName, string> = {
 const referenceIcons: Record<FileReference["kind"], IconName> = {
   file: "file", email: "mail", event: "calendar", chat: "message",
 };
+// The first two show all four Microsoft IQs: the brief, then one question that needs every IQ at once.
+const SUGGESTIONS = [
+  "Prepare me for my Thursday meeting with Michael Scott.",
+  "Michael Scott needs $400,000 for his home closing. Use all four Microsoft IQs: how could he fund it, and what must happen first?",
+  "What changed since my last discussion with Michael Scott?",
+];
+// One question per IQ; each answers from that IQ alone (the agent's instructions honour the "<IQ>:" prefix).
+const ONE_IQ: Array<{ iq: string; tone: string; question: string }> = [
+  { iq: "Work IQ", tone: "work", question: "Work IQ: everything Microsoft 365 knows about Michael Scott: mail, calendar, Friday's meeting, Teams and his files. Compare his signed IPS with the draft, read his NVDA chart, and have Work IQ's own agent list what's still open." },
+  { iq: "Fabric IQ", tone: "fabric", question: "Fabric IQ: how has Michael Scott's NVDA weight moved over the last month, and where are NVDA, his Information Technology weight and cash now against his limits?" },
+  { iq: "Foundry IQ", tone: "foundry", question: "Foundry IQ: what does our firm require when a client's single stock goes above its limit, and before we release a large wire? Cite each rule." },
+  { iq: "Web IQ", tone: "web", question: "Web IQ: what's the public news on NVIDIA this week, and its latest public share price? Links for each." },
+];
 
 function Icon({ name }: { name: IconName }) {
   return <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor"
@@ -865,10 +878,15 @@ export function App() {
             ? <button className="primary" disabled={!signIn || authBusy} onClick={() => void login()}>Sign in with Microsoft</button>
             : !selected
               ? <button className="primary" disabled={catalogBusy || creating} onClick={() => void newSession()}>Create a session</button>
-              : <div className="suggestions">
-                {["Prepare me for my Thursday meeting with Michael Scott.", "What changed since my last discussion with Michael Scott?"].map((text) =>
+              : <><div className="suggestions">
+                {SUGGESTIONS.map((text) =>
                   <button key={text} onClick={() => void send(text)}>{text}<Icon name="send" /></button>)}
-              </div>}
+              </div>
+              <div className="one-iq" role="group" aria-label="Ask one Microsoft IQ at a time">
+                <span>One IQ at a time</span>
+                {ONE_IQ.map(({ iq, tone, question }) =>
+                  <button key={iq} className={`iq-${tone}`} title={question} onClick={() => void send(question)}>{iq}</button>)}
+              </div></>}
           <small>Synthetic demo data. Sources and access depend on your permissions. Not investment advice.</small>
         </div>}
         {messages.map((message) => <article key={message.id} className={`message ${message.role}`}>

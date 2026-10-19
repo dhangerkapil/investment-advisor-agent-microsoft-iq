@@ -15,7 +15,9 @@ or a public price or quote.
 2. Call `search_public_web` with kind `news` for recent articles, `web` for pages such as investor-relations or
    filings, or `finance` for a public quote. To read one article or page in full, call `read_public_web_page` with a
    link from the results.
-3. Answer with each item's publisher or site, date and link. Keep public facts separate from client facts: the
+3. Answer under a heading "Public news (Web IQ)", with each item's publisher or site, date and link. If Web IQ
+   returns `WEB_UNAVAILABLE`, write "Public news (Web IQ): not checked; Web IQ is unavailable right now" in one line
+   and continue with the other sources. Keep public facts separate from client facts: the
    portfolio system is the system of record for positions and valuations, so a public price never changes a
    client's figures. If a public price differs from the portfolio system's, say the client's figures come from the
    portfolio system and give the public price only as market context, with its time.

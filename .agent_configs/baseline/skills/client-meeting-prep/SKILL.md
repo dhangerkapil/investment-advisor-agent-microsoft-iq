@@ -50,12 +50,13 @@ never one after another, and the brief stays under 400 words.
    and write the brief, under 400 words (if it runs long, shorten the bullets; never drop a risk, a conflict or the
    references block):
    - **Snapshot**: client, next meeting (Eastern Time), portfolio value and as-of date (and whether Fabric IQ and the
-     analyst's email agree), limits, cash; one line of public market context from Web IQ as a Markdown link
-     (`[publisher, date](url)`, the url exactly as Web IQ returned it), if you searched.
+     analyst's email agree), limits, cash; one line "Public context (Web IQ):" with public market context as a
+     Markdown link (`[publisher, date](url)`, the url exactly as Web IQ returned it), or "Public context (Web IQ): not
+     checked; Web IQ is unavailable right now" if it was.
    - **Since last discussion**: what is new, each item dated and sourced.
    - **Risks and conflicts**: limit breaches, tax budget conflicts, liquidity gaps, with exact figures, and the firm
-     rule each one triggers from Foundry IQ (document code and section, for example a review deadline or the
-     approvals a large wire needs).
+     rule each one triggers from Foundry IQ, cited as document code and section followed by "(Foundry IQ)", for
+     example "OPS-220 §2 (Foundry IQ)" (a review deadline, or the approvals a large wire needs).
    - **Questions to ask**: three to five, phrased for the advisor; no recommendations.
    - **Sources**, one line for each IQ you used, in this order: Work IQ (email subject and date, meeting title, Teams
      chat; then every file you used, by name, grouped by where it lives, as "OneDrive: <file name>, <file name>;
