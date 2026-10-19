@@ -39,7 +39,8 @@ or Web IQ.
      number unless you verify it with `inspect_document`.
    - **A whole task, delegated (A2A, Work IQ's own agent):** what is still open, with the A2A task ID (first 8
      characters).
-   - One closing line: "<n> Work IQ calls across mail, calendar, the meeting recording, Teams, OneDrive and
-     SharePoint, all as you, under one delegated permission and the tenant's Work IQ policy."
+   - One closing line, exactly: "One answer, every kind of Work IQ call: fetch, retrieve, ask and A2A, across mail,
+     calendar, the meeting recording, Teams, OneDrive and SharePoint, all as you, under one delegated permission and
+     the tenant's Work IQ policy."
    Keep it under 450 words, and end with the `workiq_references` block for every cited email, event, Teams message
    and file.
