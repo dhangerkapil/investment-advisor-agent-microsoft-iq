@@ -3,11 +3,18 @@
 Commands (run them through evals/Invoke-FoundryQuality.ps1, which signs in to the isolated profile):
   rubric     Generate the rubric evaluator "advisor-harness-quality" from the agent and a description of what a good
              answer is (a new version each time), optionally grounded in recent traces too.
+  target     Send the golden questions (evals/hosted-optimizer-cases.json) to the hosted agent and score its answers
+             with built-in judges and the rubric in one Foundry run (an agent-target evaluation: it shows on the
+             agent's Evaluation tab). The agent runs as you, so its Work IQ and Fabric IQ calls use your access.
   evaluate   Score stored responses (by response ID) with built-in judges and the rubric in one Foundry run. Works for
              prompt agents; hosted-agent responses are session-scoped and the evaluation service gets 403
-             session_not_accessible, so score a hosted agent with "traces".
-  traces     Score recent agent traces from Application Insights with the same judges (agent ID name:version).
-             A harness agent's traces split one turn into several spans, so use "dataset" for a per-turn score.
+             session_not_accessible, so score a hosted agent with "traces" or "target".
+  traces     Score the agent's recent production traces from Application Insights (filtered by agent name, every
+             version) with the same judges; nothing is replayed.
+  schedule   Create (or update) a recurring evaluation: every N hours, Foundry scores the agent's traces from that
+             interval with the same judges. --disable pauses it, --delete removes it.
+  continuous Create (or update) a continuous evaluation rule: Foundry scores the agent's responses as they complete,
+             up to --limit runs an hour. --disable pauses it, --delete removes it.
   dataset    Score saved advisor turns (prompt, tool calls and results, answer; saved by Invoke-AdvisorAgent.ps1
              -SaveAs) as an agent-format dataset with the same judges, plus the agent's instructions and tools.
   insights   Run an Insights scan over recent traces and list what it found.
@@ -20,6 +27,7 @@ State (evaluator, evaluation and monitor IDs) is kept in the work folder, never 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -185,7 +193,7 @@ def evaluate(args: argparse.Namespace) -> None:
     if not ids:
         sys.exit("No stored responses found; pass --response-ids or run the rehearsal first.")
     rubric_name = None if args.no_rubric else (state.get("rubric") or {}).get("name")
-    key = f"responses:{rubric_name}:{args.safety}"
+    key = f"responses:{rubric_name}:{args.safety}:{args.model}"
     with project(args.endpoint) as client:
         openai_client = client.get_openai_client()
         eval_id = state.get("evals", {}).get(key)
@@ -208,32 +216,194 @@ def evaluate(args: argparse.Namespace) -> None:
         })
 
 
-def traces(args: argparse.Namespace) -> None:
-    state = load_state()
-    rubric_name = None if args.no_rubric else (state.get("rubric") or {}).get("name")
+def trace_criteria(model: str, rubric_name: str | None, safety: bool) -> list[dict]:
+    """The judges, mapped onto the conversation Foundry extracts from each trace."""
     mapping = {"query": "{{item.query}}", "response": "{{item.response}}", "tool_definitions": "{{item.tool_definitions}}"}
     testing = []
-    for item in criteria(args.model, rubric_name, args.safety):
+    for item in criteria(model, rubric_name, safety):
         item = dict(item)
         if item["evaluator_name"] != "builtin.indirect_attack":
             item["data_mapping"] = mapping if item["name"] != "advisor_rubric" else {
                 "query": "{{item.query}}", "response": "{{item.response}}"}
         testing.append(item)
-    key = f"traces:{rubric_name}:{args.safety}"
+    return testing
+
+
+def traces_eval(openai_client, state: dict, args: argparse.Namespace, rubric_name: str | None) -> str:
+    """The agent's production-traces evaluation (one per agent), shared by "traces" and "schedule"."""
+    # An evaluation's judges are fixed when it's created: another judge model gets its own evaluation.
+    key = f"traces:{AGENT}:{rubric_name}:{args.safety}:{args.model}"
+    eval_id = state.get("evals", {}).get(key)
+    if not eval_id:
+        eval_id = openai_client.evals.create(
+            name=f"{AGENT} - production traces (built-in + rubric)",
+            data_source_config={"type": "azure_ai_source", "scenario": "traces"},
+            testing_criteria=trace_criteria(args.model, rubric_name, args.safety)).id
+        state.setdefault("evals", {})[key] = eval_id
+        save_state(state)
+    return eval_id
+
+
+def trace_source(args: argparse.Namespace) -> dict:
+    """The agent's traces in Application Insights, by agent name (every version) unless --agent-version is given."""
+    source = {"type": "azure_ai_traces_preview", "agent_name": AGENT, "max_traces": args.limit}
+    if args.agent_version:
+        source["agent_id"] = f"{AGENT}:{args.agent_version}"
+    return source
+
+
+def traces(args: argparse.Namespace) -> None:
+    state = load_state()
+    rubric_name = None if args.no_rubric else (state.get("rubric") or {}).get("name")
+    with project(args.endpoint) as client:
+        openai_client = client.get_openai_client()
+        eval_id = traces_eval(openai_client, state, args, rubric_name)
+        hours = max(1, round(args.hours))
+        print(f"Evaluation {eval_id}: up to {args.limit} production traces of {AGENT} from the last {hours} hours.")
+        run_and_report(openai_client, eval_id, f"traces-{AGENT}-{datetime.now(UTC):%Y%m%d-%H%M%S}",
+                       {**trace_source(args), "lookback_hours": hours})
+
+
+def schedule(args: argparse.Namespace) -> None:
+    """A recurring evaluation of production traffic: every N hours, score the traces of that interval."""
+    state = load_state()
+    rubric_name = None if args.no_rubric else (state.get("rubric") or {}).get("name")
+    schedule_id = f"{AGENT}-production-traces"
+    every = max(1, round(args.every_hours))
+    with project(args.endpoint, preview=True) as client:
+        schedules = client.beta.schedules
+        if args.delete:
+            schedules.delete(schedule_id)
+            state.get("schedules", {}).pop(AGENT, None)
+            save_state(state)
+            print(f"Deleted the recurring evaluation {schedule_id}.")
+            return
+        openai_client = client.get_openai_client()
+        eval_id = traces_eval(openai_client, state, args, rubric_name)
+        # No look-back in the run: for a scheduled evaluation Foundry takes it from the recurrence interval.
+        run = {"eval_id": eval_id, "name": f"scheduled-{AGENT}", "data_source": trace_source(args)}
+        result = schedules.create_or_update(schedule_id=schedule_id, schedule=m.Schedule(
+            display_name=f"{AGENT} - production traces every {every} h (built-in + rubric)",
+            description=f"Scores up to {args.limit} of the agent's production traces from each {every}-hour interval "
+                        f"with built-in judges{' and the rubric ' + rubric_name if rubric_name else ''}.",
+            enabled=not args.disable,
+            trigger=m.RecurrenceTrigger(interval=every, schedule=m.HourlyRecurrenceSchedule()),
+            task=m.EvaluationScheduleTask(eval_id=eval_id, eval_run=run)))
+        state.setdefault("schedules", {})[AGENT] = schedule_id
+        save_state(state)
+        status = getattr(result, "provisioning_status", None)
+        print(f"Recurring evaluation {schedule_id} ({'paused' if args.disable else 'enabled'}"
+              f"{', ' + str(status) if status else ''}): every {every} h, up to {args.limit} traces of {AGENT}, "
+              f"evaluation {eval_id}.")
+        runs = list(schedules.list_runs(schedule_id))
+        print(f"{len(runs)} scheduled run(s) so far:")
+        for item in runs[:10]:
+            data = item.as_dict() if hasattr(item, "as_dict") else dict(item)
+            print(f"  {json.dumps(data, default=str)[:300]}")
+
+
+def continuous(args: argparse.Namespace) -> None:
+    """A continuous evaluation rule: score the agent's responses as they complete, up to --limit runs an hour."""
+    state = load_state()
+    rubric_name = None if args.no_rubric else (state.get("rubric") or {}).get("name")
+    rule_id = f"{AGENT}-continuous"
+    with project(args.endpoint) as client:
+        if args.delete:
+            client.evaluation_rules.delete(rule_id)
+            state.get("rules", {}).pop(AGENT, None)
+            save_state(state)
+            print(f"Deleted the continuous evaluation rule {rule_id}.")
+            return
+        openai_client = client.get_openai_client()
+        key = f"continuous:{AGENT}:{rubric_name}:{args.safety}:{args.model}"
+        eval_id = state.get("evals", {}).get(key)
+        created = not eval_id
+        if created:
+            eval_id = openai_client.evals.create(
+                name=f"{AGENT} - continuous (built-in + rubric)",
+                data_source_config={"type": "azure_ai_source", "scenario": "responses"},
+                testing_criteria=criteria(args.model, rubric_name, args.safety)).id
+        try:
+            rule = client.evaluation_rules.create_or_update(id=rule_id, evaluation_rule=m.EvaluationRule(
+                display_name=f"{AGENT} - every response (built-in + rubric)",
+                description=f"Scores {AGENT}'s responses as they complete, up to {args.limit} an hour.",
+                action=m.ContinuousEvaluationRuleAction(eval_id=eval_id, max_hourly_runs=args.limit),
+                event_type=m.EvaluationRuleEventType.RESPONSE_COMPLETED,
+                filter=m.EvaluationRuleFilter(agent_name=AGENT), enabled=not args.disable))
+        except HttpResponseError as error:
+            if created:
+                openai_client.evals.delete(eval_id)
+            if "not supported for evaluation rules" not in str(error.message):
+                raise
+            # Continuous evaluation rules cover prompt agents; Foundry rejects hosted and external agents.
+            sys.exit(f"{AGENT} is a hosted agent, and Foundry's continuous evaluation rules don't support hosted agents "
+                     f"yet. Evaluate its production traffic with the recurring trace evaluation instead: "
+                     f"evals\\Invoke-FoundryQuality.ps1 schedule -Agent {AGENT}")
+        state.setdefault("evals", {})[key] = eval_id
+        state.setdefault("rules", {})[AGENT] = rule_id
+        save_state(state)
+        print(f"Continuous evaluation rule {rule.id} ({'paused' if args.disable else 'enabled'}): every completed "
+              f"response of {AGENT}, up to {args.limit} an hour, evaluation {eval_id}.")
+        runs = list(openai_client.evals.runs.list(eval_id=eval_id, order="desc", limit=10))
+        print(f"{len(runs)} run(s) so far:")
+        for item in runs:
+            print(f"  {item.id} {item.status} {getattr(item, 'result_counts', '')}")
+
+
+def target(args: argparse.Namespace) -> None:
+    """An agent-target evaluation: the golden questions go to the hosted agent; built-in judges and the rubric score
+    each answer, and the run shows on the agent's Evaluation tab."""
+    spec = json.loads(HOSTED_CASES.read_text(encoding="utf-8"))
+    cases = [case for case in spec["test_cases"] if not args.cases or case["id"] in args.cases]
+    state = load_state()
+    rubric_name = None if args.no_rubric else (state.get("rubric") or {}).get("name")
+    judge = {"deployment_name": args.model}
+    # The built-in judges read the answer text: a reasoning model's output items include "reasoning" content, which
+    # they reject. Tool use is scored on production traces ("traces"), where Foundry extracts the tool calls.
+    answer = {"query": "{{item.query}}", "response": "{{sample.output_text}}"}
+    testing = [
+        {"type": "azure_ai_evaluator", "name": "task_adherence", "evaluator_name": "builtin.task_adherence",
+         "initialization_parameters": judge, "data_mapping": answer},
+        {"type": "azure_ai_evaluator", "name": "intent_resolution", "evaluator_name": "builtin.intent_resolution",
+         "initialization_parameters": judge, "data_mapping": answer},
+        {"type": "azure_ai_evaluator", "name": "output_quality", "evaluator_name": "builtin.output_quality",
+         "initialization_parameters": {**judge, "evaluation_level": "turn"}, "data_mapping": answer},
+    ]
+    if rubric_name:
+        testing.append({"type": "azure_ai_evaluator", "name": "advisor_rubric", "evaluator_name": rubric_name,
+                        "initialization_parameters": judge, "data_mapping": answer})
+    if args.safety:
+        testing.append({"type": "azure_ai_evaluator", "name": "indirect_attack", "evaluator_name": "builtin.indirect_attack",
+                        "data_mapping": answer})
+    # A changed set of judges gets its own evaluation, so runs in one evaluation stay comparable.
+    signature = hashlib.sha256(json.dumps(testing, sort_keys=True).encode()).hexdigest()[:8]
+    key = f"target:{AGENT}:{rubric_name}:{args.safety}:{signature}"
     with project(args.endpoint) as client:
         openai_client = client.get_openai_client()
         eval_id = state.get("evals", {}).get(key)
         if not eval_id:
-            created = openai_client.evals.create(
-                name="Advisor harness - production traces (built-in + rubric)",
-                data_source_config={"type": "azure_ai_source", "scenario": "traces"}, testing_criteria=testing)
-            eval_id = created.id
+            eval_id = openai_client.evals.create(
+                name=f"{AGENT} - golden questions (built-in + rubric)",
+                data_source_config={"type": "custom", "include_sample_schema": True, "item_schema": {
+                    "type": "object", "required": ["query"],
+                    "properties": {"query": {"type": "string"}, "ground_truth": {"type": "string"}}}},
+                testing_criteria=testing).id
             state.setdefault("evals", {})[key] = eval_id
             save_state(state)
-        agent_id = f"{AGENT}:{args.agent_version}" if args.agent_version else AGENT
-        print(f"Evaluation {eval_id}: up to {args.limit} traces of {agent_id} from the last {args.hours} hours.")
-        run_and_report(openai_client, eval_id, f"traces-{datetime.now(UTC):%Y%m%d-%H%M%S}", {
-            "type": "azure_ai_traces", "agent_id": agent_id, "max_traces": args.limit, "lookback_hours": args.hours})
+        agent = {"type": "azure_ai_agent", "name": AGENT, **({"version": args.agent_version} if args.agent_version else {})}
+        print(f"Evaluation {eval_id}: {len(cases)} golden questions to {AGENT}"
+              f"{':' + args.agent_version if args.agent_version else ' (latest version)'}, judges: built-in"
+              f"{' + rubric ' + rubric_name if rubric_name else ''}{' + indirect attack' if args.safety else ''}.")
+        name = f"target-{AGENT}-{args.label or datetime.now(UTC).strftime('%Y%m%d-%H%M%S')}"
+        run_and_report(openai_client, eval_id, name, {
+            "type": "azure_ai_target_completions",
+            "source": {"type": "file_content", "content": [
+                {"item": {"query": shift_text(case["query"]), "ground_truth": shift_text(case.get("ground_truth") or "")}}
+                for case in cases]},
+            "input_messages": {"type": "template", "template": [
+                {"type": "message", "role": "user", "content": {"type": "input_text", "text": "{{item.query}}"}}]},
+            "target": agent,
+        })
 
 
 def agent_instructions() -> str:
@@ -352,7 +522,7 @@ def dataset(args: argparse.Namespace) -> None:
         item["data_mapping"] = mapping if item["evaluator_name"] != "builtin.indirect_attack" else {
             "query": "{{item.query}}", "response": "{{item.response}}"}
         testing.append(item)
-    key = f"dataset:{rubric_name}:{args.safety}"
+    key = f"dataset:{rubric_name}:{args.safety}:{args.model}"
     with project(args.endpoint) as client:
         openai_client = client.get_openai_client()
         eval_id = state.get("evals", {}).get(key)
@@ -802,11 +972,13 @@ def optimizer(args: argparse.Namespace) -> None:
 def main() -> None:
     global AGENT
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("command", choices=["rubric", "evaluate", "traces", "dataset", "insights", "optimize",
-                                            "optimizer", "optimize-hosted", "apply", "compare"])
+    parser.add_argument("command", choices=["rubric", "target", "evaluate", "traces", "schedule", "continuous", "dataset",
+                                            "insights", "optimize", "optimizer", "optimize-hosted", "apply", "compare"])
     parser.add_argument("--agent", default=AGENT, help="Hosted agent name (default: the live agent).")
     parser.add_argument("--endpoint", required=True, help="Foundry project endpoint.")
-    parser.add_argument("--model", required=True, help="Judge model deployment (GPT-5 or newer).")
+    parser.add_argument("--model", required=True, help="Judge model deployment (GPT-5 or newer), not the agent's own: "
+                                                       "judges scoring long traces take its whole token rate limit. "
+                                                       "optimize: also the brief-writer prompt agent's model.")
     parser.add_argument("--with-traces", action="store_true", help="rubric: also ground the rubric in recent traces.")
     parser.add_argument("--trace-days", type=int, default=3)
     parser.add_argument("--response-ids", nargs="*", help="evaluate: response IDs; default: recent saved responses.")
@@ -818,6 +990,9 @@ def main() -> None:
     parser.add_argument("--safety", action="store_true", help="Also run the indirect-attack (prompt injection) judge.")
     parser.add_argument("--list-only", action="store_true", help="insights: only list existing insights.")
     parser.add_argument("--schedule-hours", type=float, default=0, help="insights: enable scheduled scans.")
+    parser.add_argument("--every-hours", type=float, default=1, help="schedule: hours between evaluation runs.")
+    parser.add_argument("--disable", action="store_true", help="schedule, continuous: keep it, but paused.")
+    parser.add_argument("--delete", action="store_true", help="schedule, continuous: remove it.")
     parser.add_argument("--insights-model", default="", help="insights: judge deployment; default: --model.")
     parser.add_argument("--optimize-model", default="gpt-5.5", help="optimize: model that generates candidates.")
     parser.add_argument("--candidates", type=int, default=3, help="optimize: candidates to fully evaluate.")
@@ -829,14 +1004,15 @@ def main() -> None:
     parser.add_argument("--agent-model", default="", help="optimize-hosted: baseline model; default: metadata.yaml.")
     parser.add_argument("--eval-model", default="", help="optimize-hosted: judge deployment; default: --model.")
     parser.add_argument("--model-search", nargs="*", help="optimize-hosted: extra model deployments to compare.")
-    parser.add_argument("--cases", nargs="*", help="optimize-hosted: test case IDs; default: all.")
+    parser.add_argument("--cases", nargs="*", help="optimize-hosted, target: test case IDs; default: all.")
     parser.add_argument("--concurrency", type=int, default=3, help="optimize-hosted: parallel agent runs.")
     parser.add_argument("--label", default="", help="dataset: a label for this evaluation, used by compare.")
     parser.add_argument("--before", default="", help="compare: the earlier evaluation label.")
     parser.add_argument("--after", default="", help="compare: the later evaluation label.")
     args = parser.parse_args()
     AGENT = args.agent
-    {"rubric": rubric, "evaluate": evaluate, "traces": traces, "dataset": dataset, "insights": insights,
+    {"rubric": rubric, "target": target, "evaluate": evaluate, "traces": traces, "schedule": schedule,
+     "continuous": continuous, "dataset": dataset, "insights": insights,
      "optimize": optimize, "optimizer": optimizer, "optimize-hosted": optimize_hosted,
      "apply": apply_candidate, "compare": compare}[args.command](args)
 

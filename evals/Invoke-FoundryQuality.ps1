@@ -12,8 +12,12 @@
 
 .EXAMPLE
     .\evals\Invoke-FoundryQuality.ps1 rubric                    # generate the rubric evaluator
+    .\evals\Invoke-FoundryQuality.ps1 target -Safety            # golden questions to the agent, scored by built-in + rubric
+                                                                # (shows on the agent's Evaluation tab)
     .\evals\Invoke-FoundryQuality.ps1 dataset -Safety -Hours 6  # built-in + rubric (+ prompt-injection) on saved demo turns
-    .\evals\Invoke-FoundryQuality.ps1 traces -Hours 24 -Safety  # built-in + rubric (+ prompt-injection) on recent traces
+    .\evals\Invoke-FoundryQuality.ps1 traces -Hours 24 -Safety  # built-in + rubric (+ prompt-injection) on production traces
+    .\evals\Invoke-FoundryQuality.ps1 schedule -EveryHours 1    # recurring evaluation of production traces (-Disable, -Delete)
+    .\evals\Invoke-FoundryQuality.ps1 continuous -Limit 20      # continuous evaluation of completed responses (-Disable, -Delete)
     .\evals\Invoke-FoundryQuality.ps1 evaluate -Safety          # the same judges on stored responses (prompt agents only;
                                                                 # hosted-agent responses are session-scoped: 403)
     .\evals\Invoke-FoundryQuality.ps1 insights -Hours 48        # run an Insights scan and list findings
@@ -23,7 +27,7 @@
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory, Position = 0)][ValidateSet('rubric', 'evaluate', 'traces', 'dataset', 'insights', 'optimize', 'optimizer', 'optimize-hosted', 'apply', 'compare')][string]$Command,
+    [Parameter(Mandatory, Position = 0)][ValidateSet('rubric', 'target', 'evaluate', 'traces', 'schedule', 'continuous', 'dataset', 'insights', 'optimize', 'optimizer', 'optimize-hosted', 'apply', 'compare')][string]$Command,
     [double]$Hours = 24,
     [int]$Limit = 20,
     [string[]]$ResponseIds,
@@ -34,8 +38,12 @@ param(
     [switch]$WithTraces,
     [switch]$ListOnly,
     [double]$ScheduleHours = 0,
-    # traces: the Foundry agent version whose traces to score (trace spans carry gen_ai.agent.id = name:version);
-    # default: the latest version from Terraform.
+    # schedule: hours between runs of the recurring evaluation; schedule, continuous: pause or remove it.
+    [double]$EveryHours = 1,
+    [switch]$Disable,
+    [switch]$Delete,
+    # traces, target: one Foundry agent version (traces carry gen_ai.agent.id = name:version); default: every version
+    # (traces) or the latest (target).
     [string]$AgentVersion,
     # Hosted agent to scan, evaluate or optimize; default: the Terraform-managed agent.
     [string]$Agent,
@@ -75,6 +83,10 @@ if (-not (Test-Path $python)) {
 
 if (-not $Agent) { $Agent = (terraform "-chdir=$tf" output -raw -no-color agent_name).Trim() }
 $optimizerModel = (terraform "-chdir=$tf" output -raw -no-color optimizer_model_deployment).Trim()
+# Judges never share the agent's own deployment: a trace evaluation took its whole token rate limit and the agent's
+# answers failed with "rate limit exceeded". Only the brief-writer prompt agent (optimize) runs on the chat model.
+$judgeCommands = 'rubric', 'target', 'evaluate', 'traces', 'schedule', 'continuous', 'dataset'
+if ($optimizerModel -and $Command -in $judgeCommands) { $model = $optimizerModel }
 $arguments = @($Command, '--endpoint', $project, '--model', $model, '--hours', $Hours, '--limit', $Limit, '--agent', $Agent)
 if ($optimizerModel) { $arguments += @('--optimize-model', $optimizerModel) }
 if ($Command -eq 'optimize-hosted') {
@@ -82,9 +94,9 @@ if ($Command -eq 'optimize-hosted') {
     if ($optimizerModel) { $arguments += @('--eval-model', $optimizerModel) }
     if (-not $ModelSearch) { $ModelSearch = @((terraform "-chdir=$tf" output -raw -no-color model_search_deployments 2>$null) -split ',' | Where-Object { $_ }) }
     if ($ModelSearch) { $arguments += @('--model-search') + $ModelSearch }
-    if ($Cases) { $arguments += @('--cases') + $Cases }
     $arguments += @('--candidates', $Candidates, '--concurrency', $Concurrency)
 }
+if ($Cases -and $Command -in 'optimize-hosted', 'target') { $arguments += @('--cases') + $Cases }
 if ($EstimateOnly) { $arguments += '--estimate-only' }
 if ($JobId) { $arguments += @('--job-id', $JobId) }
 if ($Candidate) { $arguments += @('--candidate', $Candidate) }
@@ -99,14 +111,14 @@ if ($NoRubric) { $arguments += '--no-rubric' }
 if ($WithTraces) { $arguments += '--with-traces' }
 if ($ListOnly) { $arguments += '--list-only' }
 if ($ScheduleHours -gt 0) { $arguments += @('--schedule-hours', $ScheduleHours) }
+if ($Command -eq 'schedule') { $arguments += @('--every-hours', $EveryHours) }
+if ($Disable) { $arguments += '--disable' }
+if ($Delete) { $arguments += '--delete' }
 if ($Command -eq 'insights') {
     # Insights judges with the optimizer's deployment: its scans rate-limited the chat model the agent uses.
     $judge = (terraform "-chdir=$tf" output -raw -no-color optimizer_model_deployment).Trim()
     if ($judge) { $arguments += @('--insights-model', $judge) }
 }
-if ($Command -eq 'traces') {
-    if (-not $AgentVersion) { $AgentVersion = (terraform "-chdir=$tf" output -raw -no-color agent_version).Trim() }
-    $arguments += @('--agent-version', $AgentVersion)
-}
+if ($AgentVersion) { $arguments += @('--agent-version', $AgentVersion) }
 & $python (Join-Path $PSScriptRoot 'foundry_quality.py') @arguments
 if ($LASTEXITCODE -ne 0) { throw "foundry_quality.py $Command failed." }
