@@ -581,9 +581,27 @@ def us_eastern(moment: datetime) -> tuple[datetime, str]:
     return (utc + timedelta(hours=-4 if daylight else -5)).replace(tzinfo=None), "EDT" if daylight else "EST"
 
 
+def story_clock_floor() -> datetime | None:
+    """ADVISOR_CLOCK_NOT_BEFORE: the earliest time the agent treats as now (ISO 8601, UTC). For rehearsing a story
+    before its own timeline: on the story's Monday morning, Monday afternoon's email is still in the future. Once real
+    time passes the floor, real time applies again, so a floor never needs removing."""
+    value = os.environ.get("ADVISOR_CLOCK_NOT_BEFORE", "").strip()
+    if not value:
+        return None
+    try:
+        moment = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        logger.warning("Ignoring ADVISOR_CLOCK_NOT_BEFORE=%r: not an ISO 8601 time.", value)
+        return None
+    return (moment if moment.tzinfo else moment.replace(tzinfo=UTC)).astimezone(UTC)
+
+
 def clock_note(now: datetime | None = None) -> str:
     """The current time for the instructions: the model must never guess today's date for a Graph date range."""
     moment = (now or datetime.now(UTC)).astimezone(UTC).replace(microsecond=0)
+    floor = story_clock_floor()
+    if floor is not None and moment < floor:
+        moment = floor.replace(microsecond=0)
     local, zone = us_eastern(moment)
     eastern = f"{local:%A, %B} {local.day}, {local.year}, {local:%I:%M %p}".replace(", 0", ", ")
     return (

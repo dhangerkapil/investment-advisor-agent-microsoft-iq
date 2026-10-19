@@ -12,12 +12,17 @@
     Each step only warns on failure, so one slow component doesn't stop the rest of the prewarm.
 #>
 [CmdletBinding()]
-param([switch]$IncludeFabric)
+param(
+    [switch]$IncludeFabric,
+    # Another hosted agent in the project (for example investment-advisor-agent); default: the Terraform-managed agent.
+    [string]$AgentName
+)
 
 $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\Use-IsolatedAzure.ps1" -RequireLogin
 . "$PSScriptRoot\AdvisorCommon.ps1"
 $tf = Join-Path (Split-Path $PSScriptRoot -Parent) 'terraform'
+$target = if ($AgentName) { @{ AgentName = $AgentName } } else { @{} }
 
 if ($IncludeFabric) {
 try { & "$PSScriptRoot\Set-FabricCapacityState.ps1" -State Active } catch { Write-Warning "Could not resume the Fabric capacity: $($_.Exception.Message)" }
@@ -53,7 +58,7 @@ try {
 
 Write-Output 'Warming the hosted agent and clearing any demo fault and rehearsal preferences...'
 try {
-    $answer = & "$PSScriptRoot\Invoke-AdvisorAgent.ps1" -TimeoutSec 600 -Prompt (
+    $answer = & "$PSScriptRoot\Invoke-AdvisorAgent.ps1" @target -TimeoutSec 600 -Prompt (
         'Presenter setup: clear both demo faults (call demo_fault_switch with component fabric and enabled false, and ' +
         'with component process_crash and enabled false), and clear my saved advisor preferences (call ' +
         'advisor_preferences with action clear). ' +
@@ -63,5 +68,11 @@ try {
 } catch {
     Write-Warning "Hosted agent warm-up failed: $($_.Exception.Message)"
 }
-$ui = (terraform "-chdir=$tf" output -raw -no-color ui_url 2>$null)
+$liveAgent = (terraform "-chdir=$tf" output -raw -no-color agent_name 2>$null)
+$ui = if ($AgentName -and $AgentName -ne $liveAgent) {
+    # A UI instance for another agent (scripts/Publish-UiInstance.ps1) carries the agent's name as a tag.
+    $rg = (terraform "-chdir=$tf" output -raw -no-color resource_group_name 2>$null)
+    $fqdn = az containerapp list -g $rg --query "[?tags.agent=='$AgentName'].properties.configuration.ingress.fqdn | [0]" -o tsv 2>$null
+    if ($fqdn) { "https://$fqdn" }
+} else { (terraform "-chdir=$tf" output -raw -no-color ui_url 2>$null) }
 if ($ui) { Write-Output "UI: $ui" }

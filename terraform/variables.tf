@@ -242,7 +242,7 @@ variable "fabric_toolbox_name" {
 
 variable "agent_extra_environment" {
   type        = map(string)
-  description = "Extra hosted-agent environment variables, for example ADVISOR_OWN_SESSION_PREFIXES for tests."
+  description = "Extra hosted-agent environment variables, for example ADVISOR_CLOCK_NOT_BEFORE to rehearse the story before Monday's alert, or ADVISOR_OWN_SESSION_PREFIXES for tests."
   default     = {}
 }
 

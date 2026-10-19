@@ -37,7 +37,9 @@
 [CmdletBinding()]
 param(
     [string]$SessionId,
-    [switch]$List
+    [switch]$List,
+    # Another hosted agent in the project (for example investment-advisor-agent); default: the Terraform-managed agent.
+    [string]$AgentName
 )
 
 $ErrorActionPreference = 'Stop'
@@ -45,7 +47,7 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $tf = Join-Path $repoRoot 'terraform'
 $project = (terraform "-chdir=$tf" output -raw -no-color foundry_project_endpoint).Trim()
-$agent = (terraform "-chdir=$tf" output -raw -no-color agent_name).Trim()
+$agent = if ($AgentName) { $AgentName } else { (terraform "-chdir=$tf" output -raw -no-color agent_name).Trim() }
 $sessionsUrl = "$project/agents/$([uri]::EscapeDataString($agent))/endpoint/sessions"
 $token = az account get-access-token --resource 'https://ai.azure.com' --query accessToken -o tsv
 $headers = @{ Authorization = "Bearer $token" }

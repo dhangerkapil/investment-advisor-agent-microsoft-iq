@@ -302,6 +302,19 @@ def test_clock_note_gives_the_model_the_real_date_in_utc_and_eastern_time():
     assert "(Tuesday, December 1, 2026, 10:00 AM EST)" in clock_note(datetime(2026, 12, 1, 15, 0, tzinfo=UTC))
 
 
+def test_story_clock_floor_applies_only_before_it_and_ignores_bad_values(monkeypatch):
+    monkeypatch.setenv("ADVISOR_CLOCK_NOT_BEFORE", "2026-10-20T13:00:00Z")
+    # Before the floor (the story's Monday morning), the agent's now is the floor: Tuesday 9:00 AM Eastern.
+    assert clock_note(datetime(2026, 10, 19, 14, 30, tzinfo=UTC)).startswith(
+        "Current time: 2026-10-20T13:00:00Z (Tuesday, October 20, 2026, 9:00 AM EDT).")
+    # After it, real time again: nothing to remove before the next demo.
+    assert clock_note(datetime(2026, 10, 21, 14, 0, tzinfo=UTC)).startswith("Current time: 2026-10-21T14:00:00Z")
+    monkeypatch.setenv("ADVISOR_CLOCK_NOT_BEFORE", "next Tuesday")
+    assert clock_note(datetime(2026, 10, 19, 14, 30, tzinfo=UTC)).startswith("Current time: 2026-10-19T14:30:00Z")
+    monkeypatch.setenv("ADVISOR_CLOCK_NOT_BEFORE", "2026-10-20T09:00:00-04:00")
+    assert clock_note(datetime(2026, 10, 19, 14, 30, tzinfo=UTC)).startswith("Current time: 2026-10-20T13:00:00Z")
+
+
 def test_tool_errors_carrying_the_mcp_result_are_classified_from_that_result():
     denied = probe_result({"statusCode": 403, "error": {"message": "Mutations are disabled by the Work IQ policy"}},
                           error=True)

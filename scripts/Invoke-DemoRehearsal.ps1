@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Rehearses the Tuesday walkthrough against the deployed agent: sends each segment's prompts as the
+    Rehearses the demo walkthrough against the deployed agent: sends each segment's prompts as the
     signed-in demo user and prints the elapsed time, the tool calls and the start of each answer.
 
 .DESCRIPTION
@@ -12,16 +12,17 @@
     start a new conversation (marked "NEW:") and resume the run from the state store.
     The draft segment asks for a follow-up email, then answers the approval request: it approves (a real
     draft lands in the advisor's Outlook Drafts; delete it before the session) or, with -RejectDraft, rejects.
+    The firm, web and workiq segments need an agent with Foundry IQ, Web IQ and Work IQ Chat (A2A) tools.
 
 .EXAMPLE
     .\scripts\Invoke-DemoRehearsal.ps1
     .\scripts\Invoke-DemoRehearsal.ps1 -Segment prep, chart
     .\scripts\Invoke-DemoRehearsal.ps1 -Segment draft -RejectDraft
-    .\scripts\Invoke-DemoRehearsal.ps1 -AgentName investment-advisor-agent-candidate -SavePrefix cand -Segment prep, chart
+    .\scripts\Invoke-DemoRehearsal.ps1 -AgentName investment-advisor-agent -Segment prep, firm, web, workiq
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('prep', 'chart', 'graph', 'governance', 'draft', 'durability', 'changed', 'fabric')]
+    [ValidateSet('prep', 'chart', 'graph', 'governance', 'draft', 'durability', 'changed', 'fabric', 'firm', 'web', 'workiq')]
     [string[]]$Segment = @('prep', 'chart', 'graph', 'governance', 'draft', 'durability'),
     [int]$TimeoutSec = 600,
     [switch]$RejectDraft,
@@ -53,6 +54,14 @@ $prompts = [ordered]@{
         'Resume the durable meeting pack for Michael Scott.')
     changed    = @('What changed since my last discussion with Michael Scott?')
     fabric     = @("Get live portfolio data for Michael Scott from Fabric IQ: NVDA weight, IT sector weight and cash, with the as-of date.")
+    firm       = @('Michael wants to wire $400,000 to his title company for the closing. What does our firm policy require before we send it?')
+    web        = @(
+        'What is the public news on NVIDIA this week? Three bullets with links.',
+        "Search the web for Michael Scott's NVDA position and his stake.")
+    workiq     = @(
+        "Compare Michael Scott's signed IPS with the IPS v2 draft. Which terms changed, and which version is in force?",
+        'Delegate to Work IQ: what did Michael Scott ask me for in his recent emails, and what is still open?',
+        'Which Copilot agents can you work with through Work IQ?')
 }
 
 $target = if ($AgentName) { @{ AgentName = $AgentName } } else { @{} }

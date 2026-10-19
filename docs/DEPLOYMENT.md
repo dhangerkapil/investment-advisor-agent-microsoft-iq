@@ -208,6 +208,17 @@ To move a deployment to a new week, rerun with the new date and republish the da
 Messages and files from the old week stay in the mailbox and sites; delete them first for a clean story (see
 [Remove everything](#remove-everything)).
 
+Rehearsing on Monday, before the analyst's 4:45 PM alert? The agent treats anything dated after "now" as the future
+and leaves it out, which is right but empties the story. Pin the agent's clock to the story's Tuesday morning in
+`terraform/terraform.tfvars`, then rerun `-Step Platform`:
+
+```hcl
+agent_extra_environment = { ADVISOR_CLOCK_NOT_BEFORE = "2026-10-20T09:00:00-04:00" } # the story's Tuesday, 9:00 AM ET (-05:00 in winter)
+```
+
+Until that time the agent's clock reads the floor; after it, the real time applies again, so the floor never needs
+removing.
+
 ## Verify
 
 ```powershell
