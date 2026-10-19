@@ -9,10 +9,10 @@ Commands (run them through evals/Invoke-FoundryQuality.ps1, which signs in to th
   evaluate   Score stored responses (by response ID) with built-in judges and the rubric in one Foundry run. Works for
              prompt agents; hosted-agent responses are session-scoped and the evaluation service gets 403
              session_not_accessible, so score a hosted agent with "traces" or "target".
-  traces     Score the agent's recent production traces from Application Insights (filtered by agent name, every
-             version) with the same judges; nothing is replayed.
-  schedule   Create (or update) a recurring evaluation: every N hours, Foundry scores the agent's traces from that
-             interval with the same judges. --disable pauses it, --delete removes it.
+  traces     Check the agent's recent production traces from Application Insights (filtered by agent name, every
+             version), every agent step, for prompt injection; nothing is replayed.
+  schedule   Create (or update) a recurring evaluation: every N hours, Foundry checks the agent's traces from that
+             interval the same way. --disable pauses it, --delete removes it.
   continuous Create (or update) a continuous evaluation rule: Foundry scores the agent's responses as they complete,
              up to --limit runs an hour. --disable pauses it, --delete removes it.
   dataset    Score saved advisor turns (prompt, tool calls and results, answer; saved by Invoke-AdvisorAgent.ps1
@@ -178,7 +178,15 @@ def run_and_report(openai_client, eval_id: str, name: str, data_source: dict) ->
         print(f"  {data.get('testing_criteria', data.get('name')):<20} passed {data.get('passed')} failed {data.get('failed')}")
     if getattr(run, "error", None):
         print(f"Error: {run.error}")
-    items = list(openai_client.evals.runs.output_items.list(run_id=run.id, eval_id=eval_id))
+    try:
+        items = list(openai_client.evals.runs.output_items.list(run_id=run.id, eval_id=eval_id, limit=100))
+    except Exception as error:  # The service sometimes answers a large page with HTTP 500; the run is still done.
+        print(f"Listing all item details failed ({str(error)[:120]}); trying the default page size.")
+        try:
+            items = list(openai_client.evals.runs.output_items.list(run_id=run.id, eval_id=eval_id))
+        except Exception as again:
+            print(f"Item details unavailable ({str(again)[:120]}); see the report in the Foundry portal.")
+            items = []
     out = WORK / f"foundry-eval-{name}.json"
     out.write_text(json.dumps([item.model_dump() for item in items], indent=2, default=str))
     print(f"Item details: {out}")
@@ -217,28 +225,30 @@ def evaluate(args: argparse.Namespace) -> None:
 
 
 def trace_criteria(model: str, rubric_name: str | None, safety: bool) -> list[dict]:
-    """The judges, mapped onto the conversation Foundry extracts from each trace."""
-    mapping = {"query": "{{item.query}}", "response": "{{item.response}}", "tool_definitions": "{{item.tool_definitions}}"}
-    testing = []
-    for item in criteria(model, rubric_name, safety):
-        item = dict(item)
-        if item["evaluator_name"] != "builtin.indirect_attack":
-            item["data_mapping"] = mapping if item["name"] != "advisor_rubric" else {
-                "query": "{{item.query}}", "response": "{{item.response}}"}
-        testing.append(item)
-    return testing
+    """The judges for production traces. Foundry turns this hosted agent's traces into one item per agent step, not
+    per answer: a step that calls tools ends in a progress note ("I'll check..."), and the step that answers has no
+    tool calls. Judges of a whole turn (task adherence, tool use, output quality, the rubric) read such steps as
+    unsupported, so they run on whole answers instead (target, dataset). Each step is checked for prompt injection
+    hidden in the content the agent read (indirect attack)."""
+    return [{"type": "azure_ai_evaluator", "name": "indirect_attack", "evaluator_name": "builtin.indirect_attack"}]
+
+
+def signature(testing: list[dict]) -> str:
+    """A short hash of an evaluation's judges: changed judges get their own evaluation, so runs stay comparable."""
+    return hashlib.sha256(json.dumps(testing, sort_keys=True).encode()).hexdigest()[:8]
 
 
 def traces_eval(openai_client, state: dict, args: argparse.Namespace, rubric_name: str | None) -> str:
-    """The agent's production-traces evaluation (one per agent), shared by "traces" and "schedule"."""
-    # An evaluation's judges are fixed when it's created: another judge model gets its own evaluation.
-    key = f"traces:{AGENT}:{rubric_name}:{args.safety}:{args.model}"
+    """The agent's production-traces evaluation (one per agent and set of judges), shared by "traces" and "schedule"."""
+    testing = trace_criteria(args.model, rubric_name, args.safety)
+    # An evaluation's judges are fixed when it's created: other judges (or another judge model) get their own.
+    key = f"traces:{AGENT}:{rubric_name}:{args.safety}:{args.model}:{signature(testing)}"
     eval_id = state.get("evals", {}).get(key)
     if not eval_id:
         eval_id = openai_client.evals.create(
-            name=f"{AGENT} - production traces (built-in + rubric)",
+            name=f"{AGENT} - production traces (prompt injection, every agent step)",
             data_source_config={"type": "azure_ai_source", "scenario": "traces"},
-            testing_criteria=trace_criteria(args.model, rubric_name, args.safety)).id
+            testing_criteria=testing).id
         state.setdefault("evals", {})[key] = eval_id
         save_state(state)
     return eval_id
@@ -283,9 +293,9 @@ def schedule(args: argparse.Namespace) -> None:
         # No look-back in the run: for a scheduled evaluation Foundry takes it from the recurrence interval.
         run = {"eval_id": eval_id, "name": f"scheduled-{AGENT}", "data_source": trace_source(args)}
         result = schedules.create_or_update(schedule_id=schedule_id, schedule=m.Schedule(
-            display_name=f"{AGENT} - production traces every {every} h (built-in + rubric)",
-            description=f"Scores up to {args.limit} of the agent's production traces from each {every}-hour interval "
-                        f"with built-in judges{' and the rubric ' + rubric_name if rubric_name else ''}.",
+            display_name=f"{AGENT} - production traces every {every} h (prompt injection)",
+            description=f"Checks up to {args.limit} of the agent's production traces from each {every}-hour interval, "
+                        f"every agent step, for prompt injection hidden in the content the agent read.",
             enabled=not args.disable,
             trigger=m.RecurrenceTrigger(interval=every, schedule=m.HourlyRecurrenceSchedule()),
             task=m.EvaluationScheduleTask(eval_id=eval_id, eval_run=run)))
@@ -358,12 +368,11 @@ def target(args: argparse.Namespace) -> None:
     state = load_state()
     rubric_name = None if args.no_rubric else (state.get("rubric") or {}).get("name")
     judge = {"deployment_name": args.model}
-    # The built-in judges read the answer text: a reasoning model's output items include "reasoning" content, which
-    # they reject. Tool use is scored on production traces ("traces"), where Foundry extracts the tool calls.
+    # The judges score the answer text. Task adherence is left out: it reads an answer without its tool calls as made
+    # up, and the run's items with the tool calls (sample.output_items) also carry the model's reasoning items, which
+    # the built-in judges reject. Task adherence with the tool calls runs on saved turns ("dataset").
     answer = {"query": "{{item.query}}", "response": "{{sample.output_text}}"}
     testing = [
-        {"type": "azure_ai_evaluator", "name": "task_adherence", "evaluator_name": "builtin.task_adherence",
-         "initialization_parameters": judge, "data_mapping": answer},
         {"type": "azure_ai_evaluator", "name": "intent_resolution", "evaluator_name": "builtin.intent_resolution",
          "initialization_parameters": judge, "data_mapping": answer},
         {"type": "azure_ai_evaluator", "name": "output_quality", "evaluator_name": "builtin.output_quality",
@@ -376,8 +385,7 @@ def target(args: argparse.Namespace) -> None:
         testing.append({"type": "azure_ai_evaluator", "name": "indirect_attack", "evaluator_name": "builtin.indirect_attack",
                         "data_mapping": answer})
     # A changed set of judges gets its own evaluation, so runs in one evaluation stay comparable.
-    signature = hashlib.sha256(json.dumps(testing, sort_keys=True).encode()).hexdigest()[:8]
-    key = f"target:{AGENT}:{rubric_name}:{args.safety}:{signature}"
+    key = f"target:{AGENT}:{rubric_name}:{args.safety}:{signature(testing)}"
     with project(args.endpoint) as client:
         openai_client = client.get_openai_client()
         eval_id = state.get("evals", {}).get(key)
