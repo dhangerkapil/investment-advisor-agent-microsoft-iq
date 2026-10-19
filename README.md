@@ -161,11 +161,6 @@ registry, Work IQ API Copilot Credits and Web IQ usage. **Remove everything:** `
 | [`tests`](tests) | Unit and deployment tests |
 | [`docs`](docs) | Architecture, deployment, quality loop, demo script, technical guide |
 
-## Credits
-
-Built on [scallighan/maf-harness-workiq](https://github.com/scallighan/maf-harness-workiq) (MIT), which showed a
-Microsoft Agent Framework harness on Foundry with Work IQ through Foundry Toolbox.
-
 ## Support, security and license
 
 This is a sample, not a supported product: see [SUPPORT.md](SUPPORT.md) and [SECURITY.md](SECURITY.md). Licensed
