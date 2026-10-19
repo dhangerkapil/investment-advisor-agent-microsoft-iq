@@ -6,7 +6,8 @@ and geo boundary, and the Microsoft Data Protection Addendum doesn't apply. So t
 a client or staff name, an email address, a dollar amount or an account-like number, or a Microsoft 365 link. The
 block goes back to the model, which rephrases the query as a public topic, and shows in the trace and the X-ray.
 
-The toolbox is connected only when a web tool runs, so a Web IQ outage can never block a Work IQ request.
+The toolbox is connected only when a web tool runs, so a Web IQ outage can never block a Work IQ request. A transient
+Web IQ server error is retried twice, briefly, before the tool reports the public web as unavailable.
 """
 
 from __future__ import annotations
@@ -93,6 +94,11 @@ def unavailable(reason: str) -> str:
 
 
 TAG = re.compile(r"<[^>]{1,40}>")
+# Web IQ (preview) sometimes answers a call with a server error and the same call succeeds moments later.
+TRANSIENT = re.compile(r"status code (?:429|5\d\d)|Failed Dependency|Internal Server Error|Service Unavailable|"
+                       r"Bad Gateway|Gateway Timeout|Too Many Requests", re.IGNORECASE)
+ATTEMPTS = 3
+RETRY_DELAY = 0.6
 
 
 def trimmed(value: Any, limit: int) -> str:
@@ -148,15 +154,27 @@ def web_tools(credential: AsyncTokenCredential, url: str | None, guard: Boundary
                     function = next((f for f in box.functions if f.name == WEB_TOOL_PREFIX + name), None)
                     if function is None:
                         return None, f"the Web IQ toolbox has no {name} tool"
-                    result = await function.invoke(arguments=arguments)
+                    for attempt in range(1, ATTEMPTS + 1):
+                        try:
+                            result = await function.invoke(arguments=arguments)
+                        except Exception as exc:
+                            if attempt == ATTEMPTS or not TRANSIENT.search(str(exc)):
+                                raise
+                            logger.warning("Web IQ %s: transient error on attempt %d; retrying", name, attempt)
+                            await asyncio.sleep(RETRY_DELAY * attempt)
+                            continue
+                        text = result_text(result)
+                        if '"iserror": true' not in text[:300].lower():
+                            return text, None
+                        if attempt == ATTEMPTS or not TRANSIENT.search(text[:1_000]):
+                            return None, trimmed(text, 200)
+                        logger.warning("Web IQ %s: transient error result on attempt %d; retrying", name, attempt)
+                        await asyncio.sleep(RETRY_DELAY * attempt)
         except TimeoutError:
             return None, f"no answer within {int(timeout_seconds)} seconds"
         except Exception as exc:
             return None, f"{type(exc).__name__}: {str(exc)[:160]}"
-        text = result_text(result)
-        if '"iserror": true' in text[:300].lower():
-            return None, trimmed(text, 200)
-        return text, None
+        return None, "no answer"
 
     @tool(name=SEARCH_TOOL, approval_mode="never_require")
     async def search_public_web(

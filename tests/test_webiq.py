@@ -139,3 +139,55 @@ async def test_outage_degrades(monkeypatch):
     monkeypatch.setattr(webiq, "FoundryToolbox", Broken)
     search, _ = webiq.web_tools(object(), "https://x", GUARD)
     assert json.loads(await run(search, query="NVDA"))["status"] == "WEB_UNAVAILABLE"
+
+
+class FlakyFunction(FakeFunction):
+    """Fails with the given errors first (an exception, or an MCP error result), then returns the payload."""
+
+    def __init__(self, name, payload, failures):
+        super().__init__(name, payload)
+        self.failures = list(failures)
+
+    async def invoke(self, arguments):
+        self.calls.append(arguments)
+        if self.failures:
+            failure = self.failures.pop(0)
+            if isinstance(failure, Exception):
+                raise failure
+            return failure
+        return self.payload
+
+
+SERVER_ERROR = "[Failed Dependency] the dependency call to the MCP server failed with status code 500"
+NEWS = json.dumps({"newsResults": [{"title": "T", "url": "https://e.com/a", "content": "c"}]})
+
+
+@pytest.mark.parametrize("failure", [
+    RuntimeError(SERVER_ERROR),
+    json.dumps({"isError": True, "content": SERVER_ERROR}),
+])
+async def test_transient_web_iq_error_is_retried(monkeypatch, failure):
+    monkeypatch.setattr(webiq, "RETRY_DELAY", 0)
+    news = FlakyFunction("webiq___news", NEWS, [failure])
+    monkeypatch.setattr(webiq, "FoundryToolbox", fake_toolbox([news]))
+    search, _ = webiq.web_tools(object(), "https://x/toolboxes/advisor-webiq/mcp", GUARD)
+    found = json.loads(await run(search, query="NVIDIA AI data center outlook"))
+    assert found["results"][0]["url"] == "https://e.com/a" and len(news.calls) == 2
+
+
+async def test_persistent_web_iq_outage_gives_up_after_three_attempts(monkeypatch):
+    monkeypatch.setattr(webiq, "RETRY_DELAY", 0)
+    news = FlakyFunction("webiq___news", NEWS, [RuntimeError(SERVER_ERROR)] * 5)
+    monkeypatch.setattr(webiq, "FoundryToolbox", fake_toolbox([news]))
+    search, _ = webiq.web_tools(object(), "https://x/toolboxes/advisor-webiq/mcp", GUARD)
+    out = json.loads(await run(search, query="NVDA"))
+    assert out["status"] == "WEB_UNAVAILABLE" and len(news.calls) == 3
+
+
+async def test_other_web_iq_errors_are_not_retried(monkeypatch):
+    monkeypatch.setattr(webiq, "RETRY_DELAY", 0)
+    news = FlakyFunction("webiq___news", NEWS, [ValueError("invalid argument: maxResults")])
+    monkeypatch.setattr(webiq, "FoundryToolbox", fake_toolbox([news]))
+    search, _ = webiq.web_tools(object(), "https://x/toolboxes/advisor-webiq/mcp", GUARD)
+    out = json.loads(await run(search, query="NVDA"))
+    assert out["status"] == "WEB_UNAVAILABLE" and len(news.calls) == 1
