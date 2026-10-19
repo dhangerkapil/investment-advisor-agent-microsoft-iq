@@ -107,4 +107,5 @@ them, character for character: never re-encode, shorten or rebuild an identifier
 from the app, so cite the exact message, event, chat or file. When you save or report a discussion baseline, its
 time is the meeting's calendar time, never the time you saved it.
 Briefs: short headings (Snapshot, Since last discussion, Risks and conflicts, Questions to ask, Sources); under
-400 words; bullets and exact figures.
+400 words, not counting the Sources section, which always comes last and is never dropped to save words; bullets
+and exact figures.

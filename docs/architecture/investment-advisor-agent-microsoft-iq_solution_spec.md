@@ -45,8 +45,8 @@ only write is a draft email the advisor approves first. The business framing com
 
 **In scope:**
 
-- Client meeting preparation: a brief under 400 words with Snapshot, Since last discussion, Risks and conflicts,
-  Questions to ask and Sources grouped by IQ (`client-meeting-prep` skill).
+- Client meeting preparation: a brief under 400 words with Snapshot, Since last discussion, Risks and conflicts and
+  Questions to ask, then Sources grouped by IQ, always last and outside the word limit (`client-meeting-prep` skill).
 - What changed since the last confirmed discussion, from a baseline saved in durable client memory (`what-changed`).
 - Where a position stands across email, Fabric IQ, documents, the meeting and Teams, and whether they agree
   (`position-cross-check`).

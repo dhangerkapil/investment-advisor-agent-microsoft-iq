@@ -6,7 +6,7 @@ description: Prepare an investment advisor for a client meeting from the Microso
 Use this skill when the advisor asks to prepare for a meeting or call with a client, or asks what to remember
 about a client. Research is read-only and limited to what the signed-in advisor can access. Work in three steps.
 These steps are binding, not advice: "in ONE step" means every listed call goes out together in a single turn,
-never one after another, and the brief stays under 400 words.
+never one after another, and the brief stays under 400 words, not counting its **Sources** section.
 
 1. In ONE step, make these calls in parallel (include `recall_client_memory` only if you have not called it yet in
    this turn):
@@ -47,8 +47,8 @@ never one after another, and the brief stays under 400 words.
    (for example the signed IPS versus an unsigned draft or a client email). Compare Fabric IQ with the analyst's
    email for the same date (weight, market value, total value): say they agree, or give each difference. Then, in
    ONE step, call `record_brief`
-   and write the brief, under 400 words (if it runs long, shorten the bullets; never drop a risk, a conflict or the
-   references block):
+   and write the brief, under 400 words not counting **Sources** (if it runs long, shorten the bullets; never drop a
+   risk, a conflict, the **Sources** section or the references block):
    - **Snapshot**: client, next meeting (Eastern Time), portfolio value and as-of date (and whether Fabric IQ and the
      analyst's email agree), limits, cash; one line "Public context (Web IQ):" with public market context as a
      Markdown link (`[publisher, date](url)`, the url exactly as Web IQ returned it), or "Public context (Web IQ): not
@@ -58,16 +58,18 @@ never one after another, and the brief stays under 400 words.
      rule each one triggers from Foundry IQ, cited as document code and section followed by "(Foundry IQ)", for
      example "OPS-220 §2 (Foundry IQ)" (a review deadline, or the approvals a large wire needs).
    - **Questions to ask**: three to five, phrased for the advisor; no recommendations.
-   - **Sources**, one line for each IQ you used, in this order: Work IQ (email subject and date, meeting title, Teams
-     chat; then every file you used, by name, grouped by where it lives, as "OneDrive: <file name>, <file name>;
-     SharePoint: <file name>". OneDrive is the advisor's own files, whose links are on a `-my.sharepoint.com` host
-     under `/personal/`; SharePoint is the team's site, any other `sharepoint.com` link. Name each file; never write
-     just "files"), Fabric IQ (as-of date, or why it could not confirm), Foundry IQ (document code and section),
-     Web IQ (publisher, date and link). Cite pages only if the
-     advisor asks (then verify them with `inspect_document`). Note that tax treatment must be confirmed with the
-     client's tax adviser.
-   End with the `workiq_references` block: every cited email, event, Teams message and file, with its web link and
-   Work IQ path (`/me/messages/{id}`, `/me/events/{id}`, `/chats/{chatId}/messages/{messageId}`, `/drives/.../items/...`).
+   - **Sources**: always, as the brief's last section, under the heading "## Sources" (never drop it to save words),
+     one bullet for each IQ you used, in this order, each starting with the IQ's name in bold, for example
+     "- **Work IQ:** …": Work IQ (email subject and date, meeting title, Teams chat; then every file you used, by
+     name, grouped by where it lives, as "OneDrive: <file name>, <file name>; SharePoint: <file name>". OneDrive is
+     the advisor's own files, whose links are on a `-my.sharepoint.com` host under `/personal/`; SharePoint is the
+     team's site, any other `sharepoint.com` link. Name each file; never write just "files"), Fabric IQ (as-of date,
+     or why it could not confirm), Foundry IQ (document code and section), Web IQ (publisher, date and link). Cite
+     pages only if the advisor asks (then verify them with `inspect_document`). Note that tax treatment must be
+     confirmed with the client's tax adviser.
+   End with the `workiq_references` block, right after **Sources** (nothing else comes after it): every cited email,
+   event, Teams message and file, with its web link and Work IQ path (`/me/messages/{id}`, `/me/events/{id}`,
+   `/chats/{chatId}/messages/{messageId}`, `/drives/.../items/...`).
    Every item named under **Sources** needs an entry; files are the ones most often left out, so include each IPS
    version and any other file you used, with the drive and item IDs Work IQ returned.
 
