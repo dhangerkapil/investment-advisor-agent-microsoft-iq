@@ -58,7 +58,10 @@ never one after another, and the brief stays under 400 words.
      approvals a large wire needs).
    - **Questions to ask**: three to five, phrased for the advisor; no recommendations.
    - **Sources**, one line for each IQ you used, in this order: Work IQ (email subject and date, meeting title, Teams
-     chat, file name), Fabric IQ (as-of date, or why it could not confirm), Foundry IQ (document code and section),
+     chat; then every file you used, by name, grouped by where it lives, as "OneDrive: <file name>, <file name>;
+     SharePoint: <file name>". OneDrive is the advisor's own files, whose links are on a `-my.sharepoint.com` host
+     under `/personal/`; SharePoint is the team's site, any other `sharepoint.com` link. Name each file; never write
+     just "files"), Fabric IQ (as-of date, or why it could not confirm), Foundry IQ (document code and section),
      Web IQ (publisher, date and link). Cite pages only if the
      advisor asks (then verify them with `inspect_document`). Note that tax treatment must be confirmed with the
      client's tax adviser.
