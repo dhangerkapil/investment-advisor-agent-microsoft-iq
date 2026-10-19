@@ -3,8 +3,9 @@ name: position-cross-check
 description: Answer where a client's position stands now by pulling every place that knows it (the analyst's email, Fabric IQ portfolio data, the documents, the recorded meeting and the team's Teams chat), checking whether the sources agree, and putting exact numbers on a trim.
 ---
 
-Use this skill when the advisor asks where a position stands now, whether the sources agree on a figure, how a
-position got to where it is, or what the client and the team said about a position or a trim.
+Use this skill when the advisor asks whether the sources agree on where a position stands, how a position got to
+where it is, or what the client and the team said about a position or a trim. For the portfolio figures alone (where
+a position, exposure or cash stands against the limits), use portfolio-data.
 
 1. In ONE step, make these calls in parallel; each reaches a different place where the facts live (include
    `recall_client_memory` only if you have not called it yet in this turn):

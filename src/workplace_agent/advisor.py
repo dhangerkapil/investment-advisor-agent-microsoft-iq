@@ -28,7 +28,8 @@ FABRIC_PREFIX = "fabric_portfolio___"
 FABRIC_TOOLS = ("query_portfolio_data",)
 WORKIQ_PREFIXES = ("workiq", "work_iq")
 # Harness tools whose evidence comes from Work IQ calls they make themselves.
-WORKIQ_TOOLS = ("run_durable_meeting_pack", "inspect_document", "read_chart", "probe_workiq_policy")
+WORKIQ_TOOLS = ("run_durable_meeting_pack", "inspect_document", "read_chart", "probe_workiq_policy",
+                "list_client_documents")
 BRIEF_TOOL = "record_brief"
 BRIEF_SKILL = "client-meeting-prep"
 BASELINE_TOOL = "record_discussion_baseline"

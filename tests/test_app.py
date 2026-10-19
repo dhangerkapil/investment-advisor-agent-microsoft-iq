@@ -194,6 +194,9 @@ async def test_factory_exposes_packaged_skills_with_only_local_read_operations_a
             assert "Meetings" in instructions and "TeamsMessages" in instructions
             assert "rebalancing_check" in instructions and "to_eastern_time" in instructions
             assert "query_portfolio_data" in instructions and "Compare Fabric IQ with the analyst's" in instructions
+            # The brief lists the client's documents from their folders, not only from a search that can miss them.
+            assert "`list_client_documents` with the client's full name" in instructions
+            assert "**Client documents**" in instructions
         elif skill_name == "work-iq-chat-and-agents":
             assert "delegate_to_work_iq" in instructions and "workiq___list_agents" in instructions
             assert "`fileUrls`" in instructions and "Never pass `conversationId`" in instructions

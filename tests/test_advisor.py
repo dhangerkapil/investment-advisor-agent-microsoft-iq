@@ -119,7 +119,8 @@ def test_evidence_check_ignores_general_turns():
     assert EvidenceCheck(TurnLedger()).should_continue(iteration=1) == (False, None)
 
 
-@pytest.mark.parametrize("name", ["workiq___chat", "work_iq_preview", "toolbox___WorkIQ_Ask", "Work-IQ"])
+@pytest.mark.parametrize("name", ["workiq___chat", "work_iq_preview", "toolbox___WorkIQ_Ask", "Work-IQ",
+                                  "list_client_documents"])
 def test_workiq_tool_names_are_recognised(name):
     ledger = TurnLedger(client_turn=True)
     ledger.record("fabric_portfolio___DataAgent_Portfolio_Analyst", "ok")

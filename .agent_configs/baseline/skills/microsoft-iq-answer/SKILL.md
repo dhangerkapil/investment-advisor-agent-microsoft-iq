@@ -3,8 +3,9 @@ name: microsoft-iq-answer
 description: Answer one client question from all four Microsoft IQs at once - Work IQ (mail, meetings, Teams), Fabric IQ (the portfolio system), Foundry IQ (the firm's rules) and Web IQ (public news) - in one parallel step, with every fact labelled by its IQ and one combined picture, for example how a client could fund a cash need.
 ---
 
-Use this skill when a client question needs all four Microsoft IQs together (for example how a client could fund a
-cash need, or what a position's move means for the client), or the advisor asks for all four IQs in one answer.
+Use this skill when a client question needs every kind of source together, for example how a client could fund a cash
+need or a purchase and what must happen first, or what a position's move means for the client; or the advisor asks
+for all four IQs in one answer. Advisors ask this in business terms, without naming any source.
 
 1. In ONE step, make all of these calls in parallel (one turn, never one after another):
    - `recall_client_memory` with the client's full name.

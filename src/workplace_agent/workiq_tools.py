@@ -1,4 +1,5 @@
-"""Work IQ tools that need raw MCP results: page-verified document evidence and the governance probe."""
+"""Work IQ tools that need raw MCP results: page-verified document evidence, the client's document folders and the
+governance probe."""
 
 from __future__ import annotations
 
@@ -6,7 +7,9 @@ import asyncio
 import base64
 import json
 import logging
+import re
 import time
+from collections.abc import Awaitable, Callable
 from contextlib import AsyncExitStack
 from types import TracebackType
 from typing import Annotated, Any
@@ -266,6 +269,147 @@ def read_chart_tool(
         return json.dumps(evidence)
 
     return read_chart
+
+
+# --- Client documents -----------------------------------------------------------------------------
+CLIENT_FILES = "Client Files"
+TEAM_SITE = "/sites/root"
+FILE_FIELDS = "id,name,webUrl,lastModifiedDateTime,file,parentReference"
+GRAPH_ROOT = "https://graph.microsoft.com/v1.0"
+# Pages of 200 per folder: 2,000 entries before a listing reports that it stopped early.
+MAX_PAGES = 10
+# A client's display name as a folder name: no path separators, wildcards, control or URL-escape characters.
+CLIENT_NAME = re.compile(r"[^\x00-\x1f/\\:*?\"<>|%#~]{1,100}")
+
+
+async def all_items(
+    workiq: WorkIQ, path: str, until: Callable[[list[dict]], bool] | None = None,
+) -> tuple[list[dict], bool]:
+    """Every item of a Graph collection read through Work IQ fetch, following @odata.nextLink, and whether the
+    listing is complete. With ``until``, it stops as soon as the items read so far satisfy it."""
+    items: list[dict] = []
+    for _ in range(MAX_PAGES):
+        data = entity_data(await workiq.call("fetch", entityUrls=[path]))
+        page = data.get("value")
+        if not isinstance(page, list):
+            raise ValueError("Work IQ returned no folder listing.")
+        items.extend(item for item in page if isinstance(item, dict))
+        link = data.get("@odata.nextLink")
+        if not isinstance(link, str) or not link or (until is not None and until(items)):
+            return items, True
+        # Work IQ takes Graph paths; a next link can come back absolute or already relative.
+        path = link.removeprefix(GRAPH_ROOT)
+        if not path.startswith("/"):
+            return items, False
+    return items, False
+
+
+def document_entry(item: dict, where: str, folder: str) -> dict[str, Any]:
+    drive = (item.get("parentReference") or {}).get("driveId")
+    identifier = item.get("id")
+    return {
+        "name": item.get("name"), "where": where, "folder": folder, "web_url": item.get("webUrl"),
+        "last_modified": item.get("lastModifiedDateTime"), "drive_id": drive, "item_id": identifier,
+        "entity_url": f"/drives/{drive}/items/{identifier}" if drive and identifier else None,
+    }
+
+
+async def onedrive_documents(workiq: WorkIQ, client_name: str) -> tuple[list[dict], bool]:
+    path = "/".join(quote(part, safe="") for part in (CLIENT_FILES, client_name))
+    items, complete = await all_items(workiq, f"/me/drive/root:/{path}:/children?$select={FILE_FIELDS}&$top=200")
+    return [item for item in items if "file" in item], complete
+
+
+def named_folder(items: list[dict], name: str) -> dict | None:
+    return next((item for item in items if "folder" in item and isinstance(item.get("id"), str)
+                 and str(item.get("name", "")).casefold() == name.casefold()), None)
+
+
+async def team_site_documents(workiq: WorkIQ, client_name: str) -> tuple[list[dict], bool]:
+    # Work IQ reads the team site's folders by item ID, not by path: from the library root to Client Files, then
+    # to the client's folder.
+    drive = entity_data(await workiq.call("fetch", entityUrls=[f"{TEAM_SITE}/drive?$select=id"])).get("id")
+    if not isinstance(drive, str) or not drive:
+        raise ValueError("The team site has no document library.")
+    folder = "root"
+    for name in (CLIENT_FILES, client_name):
+        listing, complete = await all_items(
+            workiq, f"/drives/{drive}/items/{folder}/children?$select=id,name,folder&$top=200",
+            until=lambda items, name=name: named_folder(items, name) is not None)
+        match = named_folder(listing, name)
+        if match is None:
+            return [], complete
+        folder = match["id"]
+    items, complete = await all_items(workiq, f"/drives/{drive}/items/{folder}/children?$select={FILE_FIELDS}&$top=200")
+    return [item for item in items if "file" in item], complete
+
+
+async def client_documents(
+    open_session: Callable[[], ToolboxWorkIQClient], client_name: str,
+) -> dict[str, Any]:
+    """The files in the client's folder in the advisor's OneDrive and on the team site, listed through Work IQ fetch
+    as the advisor. Each location gets its own toolbox session (a session runs one call at a time), and a location
+    that fails (no such folder for this advisor, a policy denial, a throttle) never hides the other's files."""
+    client_name = " ".join(client_name.split())
+    if not CLIENT_NAME.fullmatch(client_name) or client_name in {".", ".."}:
+        raise ValueError("Give the client's name as it appears on their folder, for example 'Michael Scott'.")
+    calls: list[dict] = []
+
+    async def listing(lookup: Callable[[WorkIQ, str], Awaitable[tuple[list[dict], bool]]]) -> tuple[list[dict], bool]:
+        async with open_session() as session:
+            workiq = WorkIQ(session)
+            try:
+                return await lookup(workiq, client_name)
+            finally:
+                calls.extend(workiq.calls)
+
+    folder = f"{CLIENT_FILES}/{client_name}"
+    found = await asyncio.gather(listing(onedrive_documents), listing(team_site_documents), return_exceptions=True)
+    documents: list[dict[str, Any]] = []
+    locations: dict[str, str] = {}
+    complete = True
+    for where, result in zip(("OneDrive", "SharePoint"), found, strict=True):
+        if isinstance(result, BaseException):
+            if not isinstance(result, Exception):
+                raise result
+            # The toolbox raises a Work IQ tool error (a missing folder, a denial) as ToolExecutionException.
+            logger.warning("Listing the client's %s folder failed: %s", where, str(result)[:300])
+            locations[where] = "not found or not available to you"
+            continue
+        files, whole = result
+        complete = complete and whole
+        locations[where] = ((f"{len(files)} file(s)" if files else "no files, or no folder for this client")
+                            + ("" if whole else f"; stopped after {MAX_PAGES} pages, so there may be more"))
+        documents.extend(document_entry(item, where, folder) for item in files)
+    return {
+        "client": client_name, "folder": folder, "locations": locations, "documents": documents, "complete": complete,
+        "how_listed": (
+            f"The harness listed the folder '{folder}' in the advisor's OneDrive and on the team site through Work IQ "
+            "fetch (Microsoft Graph), as the advisor, page by page: current, with no search index involved. "
+            "OneDrive is the advisor's own files; SharePoint is the team's site."
+            + ("" if complete else " A listing stopped early, so there may be more files than these.")
+        ),
+        "workiq_calls": calls,
+    }
+
+
+def client_documents_tool(credential: AsyncTokenCredential, toolbox_url: str):
+    @tool(approval_mode="never_require")
+    async def list_client_documents(
+        client_name: Annotated[str, "The client's full name, for example 'Michael Scott'."],
+    ) -> str:
+        """Every document in the client's folder ('Client Files/<client>') in the advisor's OneDrive and on the team
+        site (SharePoint), listed through Work IQ fetch as the advisor, with each file's link, where it lives,
+        last-modified time and drive item path. Read page by page and current, unlike a search; `locations` says
+        what each place returned, including a folder the advisor can't reach."""
+        started = time.perf_counter()
+        with tracer.start_as_current_span("advisor.documents.list") as span:
+            result = await client_documents(lambda: ToolboxWorkIQClient(credential, toolbox_url), client_name)
+            result["elapsed_ms"] = int((time.perf_counter() - started) * 1000)
+            span.set_attribute("advisor.documents.count", len(result["documents"]))
+        return json.dumps(result)
+
+    return list_client_documents
 
 
 # --- Governance probe -----------------------------------------------------------------------------

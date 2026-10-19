@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 import httpx
 import pytest
+from agent_framework.exceptions import ToolExecutionException
 from mcp.types import CallToolResult, TextContent
 
 from workplace_agent.advisor import EvidenceCheck, FaultSwitch, InMemoryItemStore, TurnLedger, clock_note
@@ -18,6 +19,7 @@ from workplace_agent.workiq_tools import (
     ChartReader,
     classify,
     classify_failure,
+    client_documents,
     drive_ids,
     error_detail,
     inspect_document_evidence,
@@ -362,6 +364,82 @@ class FakeClient:
     async def call_tool(self, name, **arguments):
         self.calls.append((name, arguments))
         return self.responses.pop(0)
+
+
+class FolderSession:
+    """A Work IQ toolbox session over a fake tenant. A path it doesn't know fails the way the real toolbox does:
+    Work IQ answers with an MCP tool error, and the toolbox raises it."""
+
+    def __init__(self, routes: dict[str, str]) -> None:
+        self.routes = routes
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *exc_info):
+        return None
+
+    async def call_tool(self, name, **arguments):
+        [path] = arguments["entityUrls"]
+        if path not in self.routes:
+            raise ToolExecutionException("Error: Function failed.")
+        return self.routes[path]
+
+
+async def test_client_documents_lists_the_onedrive_and_team_site_folders_through_work_iq():
+    fields = "id,name,webUrl,lastModifiedDateTime,file,parentReference"
+    folders = "?$select=id,name,folder&$top=200"
+    files = f"?$select={fields}&$top=200"
+
+    def listing(*items, next_link=None):
+        return metadata({"value": list(items), **({"@odata.nextLink": next_link} if next_link else {})})
+
+    def document(identifier, name, drive):
+        return {"id": identifier, "name": name, "webUrl": f"https://contoso.sharepoint.com/{identifier}",
+                "file": {}, "parentReference": {"driveId": drive}}
+
+    onedrive = f"/me/drive/root:/Client%20Files/Michael%20Scott:/children{files}"
+    second_page = f"/drives/b!team/items/01MS/children{files}&$skiptoken=2"
+    routes = {
+        onedrive: listing(document("01IPS1", "IPS v1 (signed).pdf", "b!me"),
+                          {"id": "01OLD", "name": "Archive", "folder": {}, "parentReference": {"driveId": "b!me"}}),
+        "/sites/root/drive?$select=id": metadata({"id": "b!team"}),
+        # Client Files is on the library's second page: the lookup follows the next link, given here in full.
+        f"/drives/b!team/items/root/children{folders}": listing(
+            {"id": "01RS", "name": "Research", "folder": {}},
+            next_link=f"https://graph.microsoft.com/v1.0/drives/b!team/items/root/children{folders}&$skiptoken=2"),
+        f"/drives/b!team/items/root/children{folders}&$skiptoken=2": listing(
+            {"id": "01CF", "name": "Client Files", "folder": {}}),
+        f"/drives/b!team/items/01CF/children{folders}": listing({"id": "01MS", "name": "michael scott", "folder": {}}),
+        # The client's files span two pages; this next link comes back relative.
+        f"/drives/b!team/items/01MS/children{files}": listing(
+            document("01IPS2", "IPS v2 DRAFT.docx", "b!team"), next_link=second_page),
+        second_page: listing(document("01NOTES", "Meeting notes.docx", "b!team")),
+    }
+    result = await client_documents(lambda: FolderSession(routes), "  Michael   Scott ")
+    assert [(item["where"], item["name"], item["entity_url"]) for item in result["documents"]] == [
+        ("OneDrive", "IPS v1 (signed).pdf", "/drives/b!me/items/01IPS1"),
+        ("SharePoint", "IPS v2 DRAFT.docx", "/drives/b!team/items/01IPS2"),
+        ("SharePoint", "Meeting notes.docx", "/drives/b!team/items/01NOTES")]
+    assert result["locations"] == {"OneDrive": "1 file(s)", "SharePoint": "2 file(s)"}
+    assert result["complete"] is True
+    assert [call["tool"] for call in result["workiq_calls"]] == ["fetch"] * 7
+
+    # A colleague has no such folder in their own OneDrive: Work IQ fails that read, and the team site's files
+    # still come back, with the gap reported rather than raised.
+    del routes[onedrive]
+    colleague = await client_documents(lambda: FolderSession(routes), "Michael Scott")
+    assert [item["name"] for item in colleague["documents"]] == ["IPS v2 DRAFT.docx", "Meeting notes.docx"]
+    assert colleague["locations"]["OneDrive"] == "not found or not available to you"
+    assert any(call.get("failed") for call in colleague["workiq_calls"])
+
+    # A next link Work IQ can't follow ends the listing, and the result says it may be incomplete.
+    routes[second_page] = listing(document("01NOTES", "Meeting notes.docx", "b!team"),
+                                  next_link="https://contoso.example/elsewhere")
+    stopped = await client_documents(lambda: FolderSession(routes), "Michael Scott")
+    assert stopped["complete"] is False and "may be more" in stopped["locations"]["SharePoint"]
+    with pytest.raises(ValueError):
+        await client_documents(lambda: FolderSession(routes), "../Another Client")
 
 
 async def test_inspect_document_resolves_a_onedrive_url_and_verifies_the_page(pdf_bytes):

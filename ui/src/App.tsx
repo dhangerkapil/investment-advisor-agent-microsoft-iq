@@ -65,18 +65,19 @@ const paths: Record<IconName, string> = {
 const referenceIcons: Record<FileReference["kind"], IconName> = {
   file: "file", email: "mail", event: "calendar", chat: "message",
 };
-// The first two show all four Microsoft IQs: the brief, then one question that needs every IQ at once.
+// The first two show all four Microsoft IQs: the brief, then one question that needs every IQ at once. Advisors ask in
+// business terms and never name a source; the agent picks the IQs from what each question is about.
 const SUGGESTIONS = [
   "Prepare me for my Thursday meeting with Michael Scott.",
-  "Michael Scott needs $400,000 for his home closing. Use all four Microsoft IQs: how could he fund it, and what must happen first?",
+  "Michael Scott needs $400,000 for his home closing. How could we fund it, and what has to happen before the money moves?",
   "What changed since my last discussion with Michael Scott?",
 ];
-// One question per IQ; each answers from that IQ alone (the agent's instructions honour the "<IQ>:" prefix).
+// One question per IQ, in the advisor's words; each is answered from that IQ alone. The button names the IQ.
 const ONE_IQ: Array<{ iq: string; tone: string; question: string }> = [
-  { iq: "Work IQ", tone: "work", question: "Work IQ: everything Microsoft 365 knows about Michael Scott: mail, calendar, Friday's meeting, Teams and his files. Compare his signed IPS with the draft, read his NVDA chart, and have Work IQ's own agent list what's still open." },
-  { iq: "Fabric IQ", tone: "fabric", question: "Fabric IQ: how has Michael Scott's NVDA weight moved over the last month, and where are NVDA, his Information Technology weight and cash now against his limits?" },
-  { iq: "Foundry IQ", tone: "foundry", question: "Foundry IQ: what does our firm require when a client's single stock goes above its limit, and before we release a large wire? Cite each rule." },
-  { iq: "Web IQ", tone: "web", question: "Web IQ: what's the public news on NVIDIA this week, and its latest public share price? Links for each." },
+  { iq: "Work IQ", tone: "work", question: "Bring me up to speed on Michael Scott: when we next meet, what he has asked us for, what we agreed at the last review, what the team is saying, how the new policy draft differs from the signed one, what the NVIDIA chart in his portfolio overview shows, and what is still open." },
+  { iq: "Fabric IQ", tone: "fabric", question: "How has Michael Scott's NVIDIA position moved over the last month, and where do NVIDIA, his technology exposure and his cash stand against his limits today?" },
+  { iq: "Foundry IQ", tone: "foundry", question: "What does our firm require when a client's single stock goes above its limit, and before we release a large wire?" },
+  { iq: "Web IQ", tone: "web", question: "What's moving NVIDIA this week, and where is the stock trading now?" },
 ];
 
 function Icon({ name }: { name: IconName }) {
@@ -187,7 +188,8 @@ export const Activity = memo(function Activity({ run, loadDetails }: { run: Run;
         </div>)}
       <p className="activity-note">Actual hosted-agent calls only: Work IQ, Fabric IQ, Foundry IQ, Web IQ, client memory and harness checks. Private reasoning is not shown.</p>
       {run.activity.some((call) => call.detail) && <p className="activity-note">
-        Harness tools such as inspect_document call Work IQ themselves; the line under each lists those Work IQ calls.
+        The line under each call names the Microsoft IQ or harness step it reached, and as whom; harness tools such as
+        inspect_document also list the Work IQ calls they made inside.
       </p>}
       {run.activity.some((call) => call.kind === "search") && <p className="activity-note">
         Source search entries show the parent retrieval&apos;s concurrent SDK requests, not additional model tool calls.

@@ -39,15 +39,16 @@ $ErrorActionPreference = 'Stop'
 . "$PSScriptRoot\Use-IsolatedAzure.ps1" -RequireLogin
 . "$PSScriptRoot\StoryDates.ps1"
 $prompts = [ordered]@{
-    prep       = @("I'm meeting Michael Scott on Thursday. Prepare me.")
-    # The demo's second question: all four Microsoft IQs in one answer (the app's second suggestion).
-    fouriqs    = @("Michael Scott needs `$400,000 for his home closing. Use all four Microsoft IQs: how could he fund it, and what must happen first?")
-    # One IQ at a time (the app's "One IQ at a time" row); each starts a new conversation so only that IQ is called.
+    prep       = @("Prepare me for my Thursday meeting with Michael Scott.")
+    # The demo's second question: one business question that needs all four Microsoft IQs (the app's second suggestion).
+    fouriqs    = @("Michael Scott needs `$400,000 for his home closing. How could we fund it, and what has to happen before the money moves?")
+    # One IQ at a time (the app's "One IQ at a time" row): each question is in the advisor's words and never names a
+    # source; the agent picks the IQ from what it's about. Each starts a new conversation.
     eachiq     = @(
-        "NEW:Work IQ: everything Microsoft 365 knows about Michael Scott: mail, calendar, Friday's meeting, Teams and his files. Compare his signed IPS with the draft, read his NVDA chart, and have Work IQ's own agent list what's still open.",
-        'NEW:Fabric IQ: how has Michael Scott''s NVDA weight moved over the last month, and where are NVDA, his Information Technology weight and cash now against his limits?',
-        "NEW:Foundry IQ: what does our firm require when a client's single stock goes above its limit, and before we release a large wire? Cite each rule.",
-        "NEW:Web IQ: what's the public news on NVIDIA this week, and its latest public share price? Links for each.")
+        "NEW:Bring me up to speed on Michael Scott: when we next meet, what he has asked us for, what we agreed at the last review, what the team is saying, how the new policy draft differs from the signed one, what the NVIDIA chart in his portfolio overview shows, and what is still open.",
+        "NEW:How has Michael Scott's NVIDIA position moved over the last month, and where do NVIDIA, his technology exposure and his cash stand against his limits today?",
+        "NEW:What does our firm require when a client's single stock goes above its limit, and before we release a large wire?",
+        "NEW:What's moving NVIDIA this week, and where is the stock trading now?")
     meeting    = @("In Friday's Q4 portfolio review, what exactly did Michael say about his tax budget and his house? Quote the meeting transcript, and list the action items with their owners and whether each has been done since.")
     chart      = @(
         "Find the chart of Michael Scott's NVDA weight against its limit. What were the high and the low since September 1, how close did it come to the limit, and where did it end?",
@@ -63,7 +64,7 @@ $prompts = [ordered]@{
         'NEW:What is stored durably for Michael Scott right now?',
         'Resume the durable meeting pack for Michael Scott.')
     changed    = @('What changed since my last discussion with Michael Scott?')
-    fabric     = @("Get live portfolio data for Michael Scott from Fabric IQ: NVDA weight, IT sector weight and cash, with the as-of date.")
+    fabric     = @("Where do Michael Scott's NVIDIA weight, his technology exposure and his cash stand right now, and as of when?")
     firm       = @('Michael wants to wire $400,000 to his title company for the closing. What does our firm policy require before we send it?')
     web        = @(
         'What is the public news on NVIDIA this week? Three bullets with links.',

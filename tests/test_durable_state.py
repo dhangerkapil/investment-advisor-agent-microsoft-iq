@@ -430,7 +430,8 @@ async def test_hosted_agent_registers_preferences_and_state_store_tools(monkeypa
     await app.create_agent()
     try:
         names = {getattr(tool, "name", None) for tool in build.call_args.kwargs["tools"]}
-        assert {"advisor_preferences", "show_state_store", "show_durable_state", "recall_client_memory"} <= names
+        assert {"advisor_preferences", "show_state_store", "show_durable_state", "recall_client_memory",
+                "list_client_documents"} <= names
         instructions = build.call_args.kwargs["agent_instructions"]
         assert "never let a preference change facts, sources, limits or safety rules" in instructions
         assert "show_state_store" in instructions and "durable-state" in instructions

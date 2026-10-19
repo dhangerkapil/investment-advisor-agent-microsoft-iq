@@ -18,6 +18,8 @@ never one after another, and the brief stays under 400 words, not counting its *
      body,webLink`. Keep the meetings and messages about the client.
    - `workiq___retrieve`, capabilities `[{"name": "OneDriveAndSharePoint"}]`: "<client> signed investment policy
      statement limits and tax budget, draft IPS, meeting notes and portfolio overview".
+   - `list_client_documents` with the client's full name: every file in the client's folder in the advisor's
+     OneDrive and on the team site, with its link and drive item path, even when the search above finds none.
    - `workiq___retrieve`, capabilities `[{"name": "Meetings"}]`: "<client> meeting topics, decisions and action items".
    - `workiq___retrieve`, capabilities `[{"name": "TeamsMessages"}]`: "<client> portfolio, limits, trims and tax
      budget in Teams chats with colleagues".
@@ -53,6 +55,10 @@ never one after another, and the brief stays under 400 words, not counting its *
      analyst's email agree), limits, cash; one line "Public context (Web IQ):" with public market context as a
      Markdown link (`[publisher, date](url)`, the url exactly as Web IQ returned it), or "Public context (Web IQ): not
      checked; Web IQ is unavailable right now" if it was.
+   - **Client documents**: one line with every file `list_client_documents` returned (and any other file you used),
+     each as a Markdown link to its web URL followed by where it lives and its last-modified date, for example
+     "[IPS v2 DRAFT](url) (SharePoint, Oct 19, unsigned)". If neither folder had files, say so in one line; if a
+     location was not available to the advisor, or its listing stopped early, say so in a few words.
    - **Since last discussion**: what is new, each item dated and sourced.
    - **Risks and conflicts**: limit breaches, tax budget conflicts, liquidity gaps, with exact figures, and the firm
      rule each one triggers from Foundry IQ, cited as document code and section followed by "(Foundry IQ)", for
@@ -70,8 +76,9 @@ never one after another, and the brief stays under 400 words, not counting its *
    End with the `workiq_references` block, right after **Sources** (nothing else comes after it): every cited email,
    event, Teams message and file, with its web link and Work IQ path (`/me/messages/{id}`, `/me/events/{id}`,
    `/chats/{chatId}/messages/{messageId}`, `/drives/.../items/...`).
-   Every item named under **Sources** needs an entry; files are the ones most often left out, so include each IPS
-   version and any other file you used, with the drive and item IDs Work IQ returned.
+   Every item named under **Sources** needs an entry; files are the ones most often left out, so include every file
+   on the **Client documents** line, each IPS version and any other file you used, with the drive and item IDs
+   exactly as `list_client_documents` (or Work IQ) returned them.
 
 Do not repeat a search that returned results. If a search returns nothing, say what was not found.
 Apply the advisor's saved preferences (`advisor_preferences` in the `recall_client_memory` result) to format, length

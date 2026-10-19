@@ -115,7 +115,7 @@ describe("run progress", () => {
     })} />);
     expect(html).toContain("inspect_document");
     expect(html).toContain("Inside: Work IQ fetch 2.8s · fetch_blob 3.3s, as you · page matched by the harness");
-    expect(html).toContain("the line under each lists those Work IQ calls");
+    expect(html).toContain("inspect_document also list the Work IQ calls they made inside");
   });
 
   it.each(["completed", "failed"] as const)("shows an actual %s skill load without claiming rule verification", (status) => {

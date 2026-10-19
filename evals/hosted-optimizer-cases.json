@@ -4,8 +4,8 @@
   "test_cases": [
     {
       "id": "prep",
-      "query": "I'm meeting Michael Scott on Thursday. Prepare me.",
-      "ground_truth": "A brief under 400 words with Snapshot, Since last discussion, Risks and conflicts, Questions to ask and Sources. Meeting: Thursday, October 22, 2026, 10:00-11:00 AM Eastern, from the calendar. NVDA 26.1% is above the 25% single-stock limit (the analyst's email of October 19); Information Technology 40.71% is above the 40% sector limit. The house closing moved to December 15 with $400,000 due by December 10; cash after the $50,000 reserve falls short. Tax budget conflict: the signed IPS ($20,000) is in force; the accountant and the unsigned draft say $15,000; both shown, neither silently picked. Michael's 529-plan email is new. Every fact is sourced and dated; no trade, tax or investment advice; ends with a workiq_references block."
+      "query": "Prepare me for my Thursday meeting with Michael Scott.",
+      "ground_truth": "A brief under 400 words with Snapshot, Client documents, Since last discussion, Risks and conflicts, Questions to ask and Sources. Meeting: Thursday, October 22, 2026, 10:00-11:00 AM Eastern, from the calendar. Client documents lists every file in Michael's folders with a link: the signed IPS v1 and the portfolio overview in the advisor's OneDrive; the IPS v2 draft and the Q4 review meeting notes on the team's SharePoint site. NVDA 26.1% is above the 25% single-stock limit (the analyst's email of October 19); Information Technology 40.71% is above the 40% sector limit. The house closing moved to December 15 with $400,000 due by December 10; cash after the $50,000 reserve falls short. Tax budget conflict: the signed IPS ($20,000) is in force; the accountant and the unsigned draft say $15,000; both shown, neither silently picked. Michael's 529-plan email is new. Every fact is sourced and dated; no trade, tax or investment advice; ends with a workiq_references block."
     },
     {
       "id": "recall",

@@ -45,8 +45,14 @@ only write is a draft email the advisor approves first. The business framing com
 
 **In scope:**
 
-- Client meeting preparation: a brief under 400 words with Snapshot, Since last discussion, Risks and conflicts and
-  Questions to ask, then Sources grouped by IQ, always last and outside the word limit (`client-meeting-prep` skill).
+- Client meeting preparation: a brief under 400 words with Snapshot, Client documents, Since last discussion, Risks
+  and conflicts and Questions to ask, then Sources grouped by IQ, always last and outside the word limit
+  (`client-meeting-prep` skill). Client documents links every file in the client's folder in the advisor's OneDrive
+  and on the team's SharePoint site, listed through Work IQ by `list_client_documents`.
+- Questions in the advisor's own business words, never naming an IQ or a technology: the agent chooses the IQs from
+  what the question is about, and a question about one kind of fact is answered from that IQ alone
+  (`microsoft-iq-answer` for all four together, `work-iq-full-picture`, `portfolio-data`, `firm-knowledge`,
+  `public-web-research`).
 - What changed since the last confirmed discussion, from a baseline saved in durable client memory (`what-changed`).
 - Where a position stands across email, Fabric IQ, documents, the meeting and Teams, and whether they agree
   (`position-cross-check`).

@@ -53,6 +53,7 @@ def timed_name(output: object) -> str | None:
 HARNESS_WORKIQ_TOOLS = {
     "inspect_document": "page matched by the harness",
     "read_chart": "chart read by the harness's own model",
+    "list_client_documents": "the client's folders listed by the harness",
 }
 
 
@@ -82,6 +83,82 @@ def duration_text(milliseconds: object) -> str:
     return f"{milliseconds} ms" if milliseconds < 1000 else f"{milliseconds / 1000:.1f}s"
 
 
+def usd(value: object) -> str:
+    return f"${value:,.2f}" if isinstance(value, (int, float)) and not isinstance(value, bool) else "an unknown amount"
+
+
+# The as-of date at the start of a Fabric IQ answer, such as "As of 10/19/2026" or "as of **2026-10-19**".
+AS_OF = re.compile(r"\b[Aa]s of\s*\**\s*(\d{1,2}/\d{1,2}/\d{4}|\d{4}-\d{2}-\d{2}|[A-Z][a-z]{2,8}\.? \d{1,2},? \d{4})")
+# Work IQ retrieve capabilities, by what the audience would call them.
+WORKIQ_SOURCES = {
+    "Meetings": "meetings and recordings", "TeamsMessages": "Teams chats", "OneDriveAndSharePoint": "OneDrive and SharePoint",
+    "Email": "mail", "Calendar": "calendar", "People": "people",
+}
+# Matched in order against a fetch result's @odata.context: a Teams chat or channel message's context also names
+# "messages", so Teams comes before mail.
+GRAPH_KINDS = (("calendarview", "calendar"), ("/events", "calendar"), ("chats", "Teams"), ("channels", "Teams"),
+               ("messages", "mail"), ("drive", "files"), ("people", "people"))
+
+
+def call_values(arguments: str) -> dict:
+    try:
+        # The streamed arguments can hold the whole document twice ('{...}{...}'); keep one copy.
+        values = json.loads(call_arguments(arguments)) if arguments else {}
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return values if isinstance(values, dict) else {}
+
+
+def graph_reads(results: list) -> str:
+    """The Microsoft Graph reads a Work IQ fetch made, by kind, with the number of items each returned."""
+    parts = []
+    for result in results[:6]:
+        if not isinstance(result, dict):
+            continue
+        data = result.get("data") if isinstance(result.get("data"), dict) else {}
+        context = str(data.get("@odata.context", "")).lower()
+        kind = next((label for key, label in GRAPH_KINDS if key in context), "Graph")
+        code = result.get("statusCode")
+        if isinstance(code, int) and code >= 400:
+            # Only 401 and 403 are a refusal; a 404 or a bad request is a read that failed.
+            parts.append(f"{kind} {'denied' if code in (401, 403) else 'failed'} ({code})")
+        else:
+            items = data.get("value")
+            parts.append(f"{kind} ({len(items)})" if isinstance(items, list) else kind)
+    return ", ".join(parts)
+
+
+def workiq_detail(name: str, output: dict, arguments: str) -> str:
+    """For the X-ray: which Work IQ capability a call used, on which Microsoft 365 sources, as the signed-in user."""
+    tool = name.removeprefix("workiq___")
+    values = call_values(arguments)
+    if tool == "fetch":
+        reads = graph_reads(output.get("results") if isinstance(output.get("results"), list) else [])
+        return f"Work IQ fetch: exact Microsoft Graph reads, as you{': ' + reads if reads else ''}"[:300]
+    if tool == "retrieve":
+        hits = next((v for v in output.values() if isinstance(v, dict) and "resultCount" in v), output)
+        count = hits.get("resultCount")
+        names = [c.get("name") for c in values.get("capabilities") or [] if isinstance(c, dict)]
+        sources = ", ".join(WORKIQ_SOURCES.get(n, n) for n in names if isinstance(n, str)) or "Microsoft 365"
+        return (f"Work IQ retrieve: search by meaning in {sources}, as you"
+                + (f" · {count} result(s)" if isinstance(count, int) and not isinstance(count, bool) else ""))[:300]
+    if tool == "ask":
+        files = values.get("fileUrls") if isinstance(values.get("fileUrls"), list) else []
+        if values.get("agentId"):
+            return f"Work IQ ask: a Copilot agent answered, as you (agent {str(values['agentId'])[:24]})"[:300]
+        if files:
+            return f"Work IQ ask: Microsoft 365 Copilot reasoned over {len(files)} exact file(s), as you"
+        return "Work IQ ask: Microsoft 365 Copilot answered, as you"
+    if tool == "list_agents":
+        items = next((v for v in (output.get("agents"), output.get("value"), output.get("items")) if isinstance(v, list)), None)
+        return "Work IQ list_agents: the Copilot agents you can reach" + (f" ({len(items)})" if items is not None else "")
+    if tool == "fetch_blob":
+        return "Work IQ fetch_blob: file content downloaded, as you"
+    if tool == "create_entity":
+        return "Work IQ create_entity: draft saved in Outlook Drafts after your approval, never sent"
+    return f"Work IQ {tool}: as you"[:300]
+
+
 def harness_detail(name: str, output: object) -> str | None:
     """For the X-ray: the Work IQ calls a harness tool made inside it, then what the harness itself did."""
     action = HARNESS_WORKIQ_TOOLS.get(name)
@@ -103,12 +180,19 @@ def harness_detail(name: str, output: object) -> str | None:
     if isinstance(model, dict) and isinstance(model.get("deployment"), str):
         took = duration_text(model.get("ms"))
         action = f"chart read by {model['deployment'][:40]} in Foundry" + (f", {took}" if took else "")
+    documents = value.get("documents")
+    if isinstance(documents, list):
+        counts = {where: sum(1 for item in documents if isinstance(item, dict) and item.get("where") == where)
+                  for where in ("OneDrive", "SharePoint")}
+        action = f"the client's folders: OneDrive ({counts['OneDrive']}), SharePoint ({counts['SharePoint']})"
     return f"{inside} · {action}"[:300]
 
 
-def iq_detail(name: str, output: object) -> str | None:
-    """For the X-ray: what a Foundry IQ, Web IQ, Fabric IQ or durable-pack call did, in one line."""
+def iq_detail(name: str, output: object, arguments: str = "") -> str | None:
+    """For the X-ray: which Microsoft IQ (or which harness step) a call reached, as whom, and what came back."""
     value = tool_json(output)
+    if name.startswith("workiq___"):
+        return workiq_detail(name, value or {}, arguments)
     if value is None:
         return None
     status = value.get("status")
@@ -130,8 +214,14 @@ def iq_detail(name: str, output: object) -> str | None:
                                    if isinstance(p, dict) and p.get("document")))
         return (f"Foundry IQ knowledge base: {len(passages)} passage(s)" + (f" from {', '.join(codes[:5])}" if codes else "")
                 + ", as the project's managed identity")[:300]
-    if name == "query_portfolio_data" and status == "FABRIC_CONSENT_REQUIRED":
-        return "Fabric IQ: your one-time consent is needed; select Authorize in the banner"
+    if name == "query_portfolio_data":
+        if status == "FABRIC_CONSENT_REQUIRED":
+            return "Fabric IQ: your one-time consent is needed; select Authorize in the banner"
+        if status == "PORTFOLIO_DATA_UNAVAILABLE":
+            return "Fabric IQ: unavailable; the portfolio system was not checked"
+        found = AS_OF.search(str(value.get("answer", "")))
+        return ("Fabric IQ: the Portfolio Analyst data agent answered from the portfolio lakehouse"
+                + (f", as of {found.group(1)}" if found else "") + ", as you")[:300]
     if name == "delegate_to_work_iq":
         if status == "WORKIQ_CHAT_CONSENT_REQUIRED":
             return "Work IQ Chat (A2A): your one-time consent is needed; select Authorize in the banner"
@@ -141,6 +231,28 @@ def iq_detail(name: str, output: object) -> str | None:
         took = duration_text(value.get("duration_ms"))
         return (f"Work IQ Chat over A2A: task {task} {value.get('state', status)}" + (f" in {took}" if took else "")
                 + ", answered by Work IQ's own agent as you")[:300]
+    if name == "recall_client_memory":
+        found = [label for key, label in (("last_discussion", "last discussion"), ("last_brief", "last brief"))
+                 if value.get(key)]
+        preferences = value.get("advisor_preferences")
+        if isinstance(preferences, list) and preferences:
+            found.append(f"{len(preferences)} preference(s)")
+        return ("Durable client memory in the Foundry state store, yours only: "
+                + (", ".join(found) if found else "nothing saved yet"))[:300]
+    if name == "record_brief" and value.get("saved") is True:
+        return "Durable client memory: this brief saved in the Foundry state store for next time"
+    if name == "liquidity_check":
+        short = value.get("shortfall_usd")
+        return (f"Harness check, in code: {usd(value.get('available_above_reserve_usd'))} above the reserve"
+                + (f"; shortfall {usd(short)}" if isinstance(short, (int, float)) and short > 0
+                   else "; the needs are covered"))[:300]
+    if name == "rebalancing_check":
+        weight, limit = value.get("current_weight_pct"), value.get("limit_pct")
+        if not value.get("above_limit"):
+            return f"Harness check, in code: {weight}% is within the {limit}% limit"[:300]
+        return (f"Harness check, in code: {weight}% against the {limit}% limit; a trim to the limit sells "
+                f"{usd(value.get('trim_to_limit_usd'))} and realizes {usd(value.get('realized_gain_on_trim_usd'))}"
+                + (", over the tax budget" if value.get("trim_exceeds_tax_budget") else ", within the tax budget"))[:300]
     if name == "run_durable_meeting_pack":
         report = value.get("durability") if isinstance(value.get("durability"), dict) else {}
         marker = report.get("progress_marker") if isinstance(report.get("progress_marker"), dict) else {}
@@ -292,7 +404,8 @@ class ResponseEvents:
             # Only a real inspect_document result can mark a cited page as verified.
             self.verified.record(output)
         if not failed:
-            activity.detail = harness_detail(activity.name, output) or iq_detail(activity.name, output)
+            activity.detail = (harness_detail(activity.name, output)
+                               or iq_detail(activity.name, output, self.arguments.get(identifier, "")))
         if timing:
             activity.started_at = timing.started_at.isoformat()
             activity.duration_ms = timing.duration_ms

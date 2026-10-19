@@ -4,7 +4,8 @@ description: Check a concentrated position or a client cash need against the inv
 ---
 
 Use this skill when a position or sector is above its policy limit, a trim is being considered, or the client
-needs cash from the portfolio.
+needs cash from the portfolio. When the advisor asks how to fund a client's cash need and what must happen first,
+load microsoft-iq-answer instead: it applies this skill's checks.
 
 1. Collect the inputs with Work IQ, each with its source and date: position market value, total portfolio value,
    latest price, cost basis per share and cash and equivalents (the newest portfolio snapshot: the analyst's email

@@ -49,7 +49,7 @@ from .retrieval import ParallelWorkIQToolbox
 from .drafts import draft_tool
 from .webiq import web_tools
 from .workiq_chat import chat_tools
-from .workiq_tools import inspect_document_tool, probe_tool, read_chart_tool
+from .workiq_tools import client_documents_tool, inspect_document_tool, probe_tool, read_chart_tool
 
 
 def pack_runners(portfolio, knowledge: list, web: list) -> dict:
@@ -195,6 +195,7 @@ async def create_agent() -> Agent:
             toolbox, *memory.tools(ledger), preferences.tool(), rebalancing_check, liquidity_check,
             to_eastern_time, faults.tool(crash_toggle=pack.arm_crash), *pack.tools(), inventory.tool(),
             inspect_document_tool(credential, toolbox_endpoint, documents),
+            client_documents_tool(credential, toolbox_endpoint),
             read_chart_tool(credential, toolbox_endpoint, project_endpoint,
                             os.environ.get("AZURE_AI_MODEL_DEPLOYMENT_NAME") or settings.model,
                             context.platform_headers(), documents),

@@ -26,7 +26,7 @@ from pydantic import ValidationError
 from workplace_agent.execution import TIMING_KEY
 from workplace_agent.ui.auth import Authenticator, Principal
 from workplace_agent.ui.config import UIConfig
-from workplace_agent.ui.events import DURABLE_STOP, ResponseEvents
+from workplace_agent.ui.events import DURABLE_STOP, ResponseEvents, iq_detail
 from workplace_agent.ui.foundry import FoundryGateway, document_pdf, preview_reference, render_page
 from workplace_agent.ui.grounding import Evidence
 from workplace_agent.ui.models import Reference, RunRecord, ToolActivity
@@ -465,22 +465,78 @@ def test_harness_tools_show_the_work_iq_calls_they_made_inside() -> None:
             {"tool": "fetch", "ms": 2817}, {"tool": "fetch_blob", "ms": 3262}], "reused_download": False},
         "read_chart": {"reading": {}, "workiq_calls": [], "reused_download": True,
                        "model_call": {"deployment": "gpt-5.6-luna", "ms": 4800}},
+        "list_client_documents": {"workiq_calls": [{"tool": "fetch", "ms": 640}, {"tool": "fetch", "ms": 1200}],
+                                  "documents": [{"where": "OneDrive"}, {"where": "OneDrive"}, {"where": "SharePoint"}]},
         "workiq___retrieve": {"workiq_calls": [{"tool": "fetch", "ms": 1}]},
     }
     for index, (name, output) in enumerate(outputs.items()):
         adapter.completed_item({"type": "function_call", "name": name, "call_id": f"c{index}", "arguments": "{}"})
         adapter.completed_item({"type": "function_call_output", "call_id": f"c{index}", "output": json.dumps(output)})
-    inspect, chart, retrieve = record.activity
+    inspect, chart, documents, retrieve = record.activity
     assert inspect.detail == "Inside: Work IQ fetch 2.8s · fetch_blob 3.3s, as you · page matched by the harness"
     assert chart.detail == ("Inside: the file Work IQ downloaded earlier in this turn, as you · "
                             "chart read by gpt-5.6-luna in Foundry, 4.8s")
-    # Only harness tools get a detail line; a Work IQ call is already its own X-ray entry.
-    assert retrieve.detail is None
+    assert documents.detail == ("Inside: Work IQ fetch 640 ms · fetch 1.2s, as you · "
+                                "the client's folders: OneDrive (2), SharePoint (1)")
+    # A Work IQ call is its own X-ray entry; its line names the capability, not calls made inside it.
+    assert retrieve.detail == "Work IQ retrieve: search by meaning in Microsoft 365, as you"
     failed = RunRecord(id=str(uuid4()), session_id=str(uuid4()), prompt_preview="Chart", started_at=now())
     adapter = ResponseEvents(failed, "https://example.services.ai.azure.com/api/projects/workplace")
     adapter.completed_item({"type": "function_call", "name": "inspect_document", "call_id": "f", "arguments": "{}"})
     adapter.completed_item({"type": "function_call_output", "call_id": "f", "output": "Error: Function failed."})
     assert failed.activity[0].detail is None
+
+
+def test_every_iq_call_says_which_iq_it_reached_and_as_whom() -> None:
+    record = RunRecord(id=str(uuid4()), session_id=str(uuid4()), prompt_preview="Brief", started_at=now())
+    adapter = ResponseEvents(record, "https://example.services.ai.azure.com/api/projects/workplace")
+    graph = "https://graph.microsoft.com/v1.0/$metadata#users('u')"
+    calls = [
+        ("workiq___fetch", {"entityUrls": ["/me/calendarView", "/me/messages"]}, {"results": [
+            {"statusCode": 200, "data": {"@odata.context": f"{graph}/calendarView(id)", "value": [{}, {}]}},
+            {"statusCode": 200, "data": {"@odata.context": f"{graph}/messages(id)", "value": [{}] * 3}}]}),
+        ("workiq___retrieve", {"query": "q", "capabilities": [{"name": "Meetings"}]},
+         {"application/vnd.ms-workiq.retrieval": {"markdown": "…", "resultCount": 1}}),
+        ("workiq___ask", {"question": "Compare", "fileUrls": ["https://a", "https://b"]}, {"answer": "…"}),
+        ("query_portfolio_data", {"question": "q"},
+         {"source": "Fabric IQ Portfolio Analyst", "answer": "As of 10/19/2026:\n\n- Total portfolio value: …"}),
+        ("query_portfolio_data", {"question": "q"}, {"status": "PORTFOLIO_DATA_UNAVAILABLE", "reason": "timeout"}),
+        ("recall_client_memory", {"client_name": "Michael Scott"},
+         {"client": "Michael Scott", "last_discussion": {"at": "…"}, "last_brief": {"at": "…"}, "advisor_preferences": []}),
+        ("record_brief", {"client_name": "Michael Scott"}, {"saved": True, "saved_at": "…"}),
+        ("liquidity_check", {}, {"available_above_reserve_usd": 232219.15, "shortfall_usd": 167780.85}),
+        ("rebalancing_check", {}, {"current_weight_pct": 26.1, "limit_pct": 25.0, "above_limit": True,
+                                   "trim_to_limit_usd": 32167.14, "realized_gain_on_trim_usd": 25633.17,
+                                   "trim_exceeds_tax_budget": True}),
+    ]
+    for index, (name, arguments, output) in enumerate(calls):
+        adapter.completed_item({"type": "function_call", "name": name, "call_id": f"c{index}",
+                                "arguments": json.dumps(arguments)})
+        adapter.completed_item({"type": "function_call_output", "call_id": f"c{index}", "output": json.dumps(output)})
+    assert [call.detail for call in record.activity] == [
+        "Work IQ fetch: exact Microsoft Graph reads, as you: calendar (2), mail (3)",
+        "Work IQ retrieve: search by meaning in meetings and recordings, as you · 1 result(s)",
+        "Work IQ ask: Microsoft 365 Copilot reasoned over 2 exact file(s), as you",
+        "Fabric IQ: the Portfolio Analyst data agent answered from the portfolio lakehouse, as of 10/19/2026, as you",
+        "Fabric IQ: unavailable; the portfolio system was not checked",
+        "Durable client memory in the Foundry state store, yours only: last discussion, last brief",
+        "Durable client memory: this brief saved in the Foundry state store for next time",
+        "Harness check, in code: $232,219.15 above the reserve; shortfall $167,780.85",
+        "Harness check, in code: 26.1% against the 25.0% limit; a trim to the limit sells $32,167.14 and realizes "
+        "$25,633.17, over the tax budget",
+    ]
+    # Streamed arguments can hold the whole document twice; the line still names the Microsoft 365 source.
+    twice = json.dumps({"query": "q", "capabilities": [{"name": "OneDriveAndSharePoint"}]}) * 2
+    retrieved = json.dumps({"application/vnd.ms-workiq.retrieval": {"markdown": "…", "resultCount": 5}})
+    assert iq_detail("workiq___retrieve", retrieved, twice) == (
+        "Work IQ retrieve: search by meaning in OneDrive and SharePoint, as you · 5 result(s)")
+    # A Teams message's context also says "messages"; it's Teams, not mail. Only 401 and 403 are a denial.
+    reads = json.dumps({"results": [
+        {"statusCode": 200, "data": {"@odata.context": "https://graph.microsoft.com/v1.0/$metadata#chats('19%3Aa')/messages/$entity"}},
+        {"statusCode": 200, "data": {"@odata.context": f"{graph}/messages(id)", "value": [{}]}},
+        {"statusCode": 403, "data": {}}, {"statusCode": 404, "data": {}}]})
+    assert iq_detail("workiq___fetch", reads, "{}") == (
+        "Work IQ fetch: exact Microsoft Graph reads, as you: Teams, mail (1), Graph denied (403), Graph failed (404)")
 
 
 def test_fabric_consent_from_a_tool_result_becomes_a_consent_banner_with_the_full_link() -> None:
@@ -1625,6 +1681,47 @@ def test_mis_copied_item_ids_are_repaired_from_work_iq_output_and_ties_are_left_
     assert evidence.repair(chat).entity_url == "/chats/19:abc_def@unq.gbl.spaces/messages/1792189544345"
     document = Reference(title="IPS", url=IPS_URL, drive_id="b!drive-1", item_id="01ABCDEFGHIJKLMNOPQRSTUVWXYZ245")
     assert evidence.repair(document).item_id == "01ABCDEFGHIJKLMNOPQRSTUVWXYZ2345"
+
+
+def test_an_id_missing_the_span_between_its_repeated_segments_is_repaired_to_its_own_item() -> None:
+    # Outlook IDs repeat one segment; a model copying the ID can jump from the first copy to the second.
+    evidence = Evidence()
+    evidence.record(WORKIQ_OUTPUT)
+    segment = "DvO4OcOOvDTqtZ2QVsdZv0"
+    first = MAIL_ID.index(segment)
+    dropped = MAIL_ID[:first] + MAIL_ID[MAIL_ID.index(segment, first + 1):]
+    assert len(MAIL_ID) - len(dropped) == 32
+    cited = Reference(title="Item", url="https://outlook.office365.com/owa/", entity_url=f"/me/messages/{dropped}")
+    # The sibling shares everything but the item's own ending, so only MAIL_ID fits.
+    assert evidence.repair(cited).entity_url == f"/me/messages/{MAIL_ID}"
+
+
+def test_an_item_whose_id_cannot_be_matched_is_found_by_its_exact_title_in_the_graph_reads() -> None:
+    def envelope(values: list[dict]) -> str:
+        data = json.dumps({"results": [{"data": {"value": values}, "statusCode": 200}]})
+        return json.dumps({"__workiq_tool_execution__": {"version": 1, "name": "workiq___fetch"}, "output": data})
+
+    evidence = Evidence()
+    evidence.record(envelope([
+        {"id": MAIL_ID, "subject": "NVDA +11.2% today", "receivedDateTime": "2026-10-19T21:00:00Z"},
+        {"id": SIBLING_ID, "subject": "Q4 portfolio review", "receivedDateTime": "2026-10-14T21:00:00Z"},
+        {"id": EVENT_ID, "subject": "Q4 portfolio review", "start": {"dateTime": "2026-10-16T15:30:00"}},
+    ]))
+
+    def cite(title: str, entity_url: str) -> Reference:
+        return Reference(title=title, url="https://outlook.office365.com/owa/", entity_url=entity_url)
+
+    garbled = MAIL_ID[:-12] + "XXXXXXXXAAA="
+    assert evidence.repair(cite("NVDA +11.2% today", f"/me/messages/{garbled}")).entity_url == f"/me/messages/{MAIL_ID}"
+    # The meeting and its invitation share a title: each kind keeps its own item.
+    meeting = cite("Q4 portfolio review", "/me/events/" + EVENT_ID[:-12] + "XXXXXXXXAAA=")
+    assert evidence.repair(meeting).entity_url == f"/me/events/{EVENT_ID}"
+    invitation = cite("Q4 portfolio review", "/me/messages/" + SIBLING_ID[:-12] + "XXXXXXXXAAA=")
+    assert evidence.repair(invitation).entity_url == f"/me/messages/{SIBLING_ID}"
+    evidence.record(envelope([{"id": MAIL_ID.replace("ZGhnd", "ZGhnx"), "subject": "NVDA +11.2% today",
+                               "receivedDateTime": "2026-10-20T21:00:00Z"}]))
+    ambiguous = cite("NVDA +11.2% today", f"/me/messages/{garbled}")
+    assert evidence.repair(ambiguous) is ambiguous
 
 
 def test_streamed_references_keep_the_cited_ids_even_when_a_sibling_was_retrieved() -> None:
