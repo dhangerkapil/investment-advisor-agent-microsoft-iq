@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { ActivitySchema, ApprovalSchema, DocumentPageSchema, MessageBatcher, ReferenceSchema, SourceViewSchema, approvalTitle, citedPage, displayText, evidencePages, fileHome, groundingSummary, locationLabel, mergeRun, mergeStreamMessages, protocolMessages, toolDuration, type Run } from "./models";
+import { ActivitySchema, ApprovalSchema, DocumentPageSchema, MessageBatcher, ReferenceSchema, SourceViewSchema, approvalTitle, citedPage, displayText, evidencePages, fileHome, groundingSummary, locationLabel, mergeRun, mergeStreamMessages, originalUrl, protocolMessages, toolDuration, type Run } from "./models";
 
 describe("reference presentation", () => {
   it("keeps normal answer text and hides machine metadata, including unfinished streaming blocks", () => {
@@ -34,6 +34,21 @@ describe("reference presentation", () => {
     expect(groundingSummary([onedrive, site, { ...site, url: "https://contoso.sharepoint.com/sites/clients/n.docx" }]))
       .toBe("3 files (1 in OneDrive, 2 in SharePoint)");
     expect(groundingSummary([onedrive, other])).toBe("2 files (1 in OneDrive)");
+  });
+
+  it("opens a OneDrive file in the OneDrive web app and leaves other links alone", () => {
+    const onedrive = ReferenceSchema.parse({
+      title: "Overview", url: "https://contoso-my.sharepoint.com/personal/adele_contoso_com/Documents/Client%20Files/Overview%20(Oct).pdf",
+    });
+    expect(originalUrl(onedrive)).toBe("https://contoso-my.sharepoint.com/personal/adele_contoso_com/_layouts/15/onedrive.aspx"
+      + "?id=%2Fpersonal%2Fadele_contoso_com%2FDocuments%2FClient%20Files%2FOverview%20(Oct).pdf"
+      + "&parent=%2Fpersonal%2Fadele_contoso_com%2FDocuments%2FClient%20Files");
+    const site = ReferenceSchema.parse({ title: "IPS v2", url: "https://contoso.sharepoint.com/sites/clients/IPS.docx" });
+    expect(originalUrl(site)).toBe(site.url);
+    const office = "https://contoso-my.sharepoint.com/personal/adele_contoso_com/_layouts/15/Doc.aspx?sourcedoc=%7B1%7D";
+    expect(originalUrl(onedrive, office)).toBe(office);
+    expect(originalUrl({ ...onedrive, url: "https://contoso-my.sharepoint.com/personal/adele_contoso_com" }))
+      .toBe("https://contoso-my.sharepoint.com/personal/adele_contoso_com");
   });
 
   it("labels Microsoft 365 sources by kind and defaults older references to files", () => {

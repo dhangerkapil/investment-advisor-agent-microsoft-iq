@@ -29,6 +29,7 @@ import {
   locationLabel,
   mergeRun,
   mergeStreamMessages,
+  originalUrl,
   protocolMessages,
   toolDuration,
   runProgressLabel,
@@ -928,7 +929,7 @@ export function App() {
       </header>
       <div className="preview-toolbar"><span>{locationLabel(reference)}</span>
         {reference.kind === "file"
-          ? <a href={documentPage?.web_url ?? reference.url} target="_blank" rel="noopener noreferrer">Open original <Icon name="external" /></a>
+          ? <a href={originalUrl(reference, documentPage?.web_url)} target="_blank" rel="noopener noreferrer">Open original <Icon name="external" /></a>
           : <a href={sourceView?.open_url ?? reference.url} target="_blank" rel="noopener noreferrer">
             {sourceView?.open_label ?? "Open original"} <Icon name="external" /></a>}
       </div>

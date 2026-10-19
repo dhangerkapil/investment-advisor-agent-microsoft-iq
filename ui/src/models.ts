@@ -227,6 +227,26 @@ export function fileHome(reference: FileReference): "OneDrive" | "SharePoint" | 
   return null;
 }
 
+/**
+ * Where "Open original" goes. A OneDrive file's own link opens the bare file, which looks like any SharePoint address;
+ * this opens it in the OneDrive web app instead (its viewer, with the folder behind it). Other links are unchanged.
+ */
+export function originalUrl(reference: FileReference, webUrl?: string | null): string {
+  const url = webUrl || reference.url;
+  if (reference.kind !== "file") return url;
+  let parsed: URL;
+  let path: string;
+  try {
+    parsed = new URL(url);
+    path = decodeURIComponent(parsed.pathname);
+  } catch { return url; }
+  if (!/-my\.sharepoint(?:-df)?\.com$/i.test(parsed.hostname) || path.includes("/_layouts/")) return url;
+  const match = /^(\/personal\/[^/]+)\/(.+)\/[^/]+$/.exec(path);
+  if (!match) return url;
+  return `${parsed.origin}${match[1]}/_layouts/15/onedrive.aspx?id=${encodeURIComponent(path)}`
+    + `&parent=${encodeURIComponent(`${match[1]}/${match[2]}`)}`;
+}
+
 export function locationLabel(reference: FileReference): string {
   if (reference.kind === "email") return "Email";
   if (reference.kind === "event") return "Meeting";
