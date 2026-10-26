@@ -29,8 +29,9 @@ param(
     [string]$AgentAppId,
     # How the agent is named in the policy's location; default: Terraform's agent_name.
     [string]$AgentDisplayName,
-    [string]$PolicyName = 'Investment Advisor agent: block sensitive data in prompts',
-    [string]$RuleName = 'Investment Advisor agent: block U.S. Social Security numbers in prompts',
+    # Purview limits both names to 64 characters; rule names are unique in a tenant.
+    [ValidateLength(1, 64)][string]$PolicyName = 'Investment Advisor agent: block sensitive data in prompts',
+    [ValidateLength(1, 64)][string]$RuleName = 'Investment Advisor agent: block U.S. SSNs in prompts',
     [string]$SensitiveInformationType = 'U.S. Social Security Number (SSN)',
     # A Security & Compliance PowerShell token, for automation; otherwise the sign-in is interactive.
     [string]$AccessToken,
@@ -63,12 +64,15 @@ $connect = @{ UserPrincipalName = $UserPrincipalName; ShowBanner = $false }
 if ($AccessToken) { $connect.AccessToken = $AccessToken }
 if ($DisableWAM) { $connect.DisableWAM = $true }
 Connect-IPPSSession @connect
+# The session's cmdlets are functions of a module that the connection generates, so they don't see this script's
+# $ErrorActionPreference: each change below passes -ErrorAction Stop, or a failure would print and the script go on.
 try {
     $policy = Get-DlpCompliancePolicy -Identity $PolicyName -ErrorAction SilentlyContinue
     if ($Remove) {
         if ($policy) {
-            Get-DlpComplianceRule -Policy $PolicyName | ForEach-Object { Remove-DlpComplianceRule -Identity $_.Name -Confirm:$false }
-            Remove-DlpCompliancePolicy -Identity $PolicyName -Confirm:$false
+            Get-DlpComplianceRule -Policy $PolicyName -ErrorAction Stop |
+                ForEach-Object { Remove-DlpComplianceRule -Identity $_.Name -Confirm:$false -ErrorAction Stop }
+            Remove-DlpCompliancePolicy -Identity $PolicyName -Confirm:$false -ErrorAction Stop
             Write-Output "Removed the DLP policy '$PolicyName'."
         } else {
             Write-Output "No DLP policy named '$PolicyName'."
@@ -86,23 +90,26 @@ try {
                 Inclusions          = @(@{ Type = 'Tenant'; Identity = 'All' })
             }) | ConvertTo-Json -Depth 5 -Compress -AsArray
         $policy = New-DlpCompliancePolicy -Name $PolicyName -Mode Enable -Locations $location -EnforcementPlanes @('Application') `
-            -Comment 'Blocks prompts with sensitive data before the Investment Advisor agent sees them (the agent calls Purview through Agent Framework).'
+            -Comment 'Blocks prompts with sensitive data before the Investment Advisor agent sees them (the agent calls Purview through Agent Framework).' `
+            -ErrorAction Stop
         Write-Output "Created the DLP policy '$PolicyName' for the Entra app $AgentAppId."
     } else {
         Write-Output "The DLP policy '$PolicyName' exists."
     }
 
-    if (-not (Get-DlpComplianceRule -Policy $PolicyName | Where-Object Name -EQ $RuleName)) {
+    if (-not (Get-DlpComplianceRule -Policy $PolicyName -ErrorAction Stop | Where-Object Name -EQ $RuleName)) {
         New-DlpComplianceRule -Name $RuleName -Policy $PolicyName `
             -ContentContainsSensitiveInformation @{ Name = $SensitiveInformationType } `
             -RestrictAccess @(@{ setting = 'UploadText'; value = 'Block' }) `
-            -GenerateAlert $true -ReportSeverityLevel 'Medium' | Out-Null
+            -GenerateAlert $true -ReportSeverityLevel 'Medium' -ErrorAction Stop | Out-Null
         Write-Output "Created the rule '$RuleName': block prompts that contain '$SensitiveInformationType', with an alert."
     } else {
         Write-Output "The rule '$RuleName' exists."
     }
 
     Get-DlpCompliancePolicy -Identity $PolicyName | Select-Object Name, Mode, EnforcementPlanes, DistributionStatus |
+        Format-List | Out-String | Write-Output
+    Get-DlpComplianceRule -Policy $PolicyName | Select-Object Name, Disabled, GenerateAlert |
         Format-List | Out-String | Write-Output
 } finally {
     Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue | Out-Null
