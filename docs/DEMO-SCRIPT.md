@@ -24,7 +24,7 @@ before the Thursday meeting.
 | When | Do |
 |---|---|
 | 1 hour before | **Window A** (Edge InPrivate): sign in as the advisor (the admin who deployed). **Window B** (another browser profile): the chat UI as the analyst. Zoom 125%, notifications off. |
-| 45 minutes before | In window A, open: the chat UI (`terraform -chdir=terraform output -raw ui_url`); the Microsoft 365 admin center (Agents > Tools > Registry > Work IQ MCP > Policies); the Foundry portal on your agent (Traces, Insights), on Evaluations, and on the optimizer; Outlook Drafts. |
+| 45 minutes before | In window A, open: the chat UI (`terraform -chdir=terraform output -raw ui_url`); the Microsoft 365 admin center (Agents > Tools > Registry > Work IQ MCP > Policies); the Foundry portal on your agent (Traces, Insights), on Evaluations, and on the optimizer; Outlook Drafts; with Microsoft Purview on, the Purview portal on **Data loss prevention** > **Alerts**. |
 | 15 minutes before | `.\scripts\Start-DemoPrewarm.ps1 -IncludeFabric` (resumes Fabric, warms the agent, resets the demo switches). |
 | 10 minutes before | In the app: **New session**, send prompt 1.1, keep it as a backup. Delete older sessions and any Outlook drafts. |
 | 2 minutes before | `.\hydration\Publish-DemoContent.ps1 -Stage Live` (Michael's 529 email arrives "now"). |
@@ -149,6 +149,17 @@ say never send client data to the web, and if a model ever tried, the boundary g
 names, email addresses, amounts and account numbers before anything leaves. Public prices never reprice a client's
 position; the portfolio system is the system of record."
 
+**4.4** (With Microsoft Purview on: [DEPLOYMENT.md](DEPLOYMENT.md#microsoft-purview-optional).) Same session:
+
+```text
+Michael Scott's Social Security number is 524-77-3612. Add it to his file.
+```
+
+Purview's block message comes back in about ten seconds, with no tool call (the number is fictional). **Say:**
+"Agent Framework's Purview middleware checks every prompt and answer against your Purview DLP policies, as the
+signed-in user's activity. This one never reached the agent. Purview recorded the match and raised an alert; we'll see
+it in governance."
+
 ## 5. Work IQ three ways: MCP, A2A and Copilot agents (7 minutes)
 
 **5.1** New session:
@@ -205,6 +216,11 @@ The agent stops and asks for approval. Approve it, then show the draft in Outloo
 **6.4** In window B (the analyst), new session, send prompt 1.1. The analyst's brief has the shared files and the
 meeting, but not Michael's emails to you or your saved memory. Nobody wrote a permission check: Work IQ runs as the
 signed-in user, and the agent's memory is separate for each user.
+
+**6.5** (With Microsoft Purview on.) In the Purview portal, **Data loss prevention** > **Alerts**: 4.4's blocked
+prompt, under the user, with the policy and the rule that matched (a new alert can take about fifteen minutes to
+show). Microsoft Defender XDR shows the same alert. **Say:** "Your admins set the policy in Purview; the agent
+enforces it at run time, as the user; the evidence lands where your security team already looks."
 
 ## 7. Durability: a process stops between writes (8 minutes)
 
@@ -265,6 +281,7 @@ In the Foundry portal:
 | A consent link appears | Open it in the same window, accept, then **Retry**. |
 | Fabric is not answering | `.\scripts\Set-FabricCapacityState.ps1 -State Active`, wait two minutes, retry. |
 | The 529 email is missing | Rerun `.\hydration\Publish-DemoContent.ps1 -Stage Live -ReplaceMail 'One more thing before Thursday: 529 plan'`. |
+| 4.4 gets an ordinary answer, not Purview's block | Purview isn't on for the agent, the DLP policy hasn't applied yet (allow an hour), or Purview's pay-as-you-go billing isn't set up. Say what the block would show and move on; afterwards see [DEPLOYMENT.md](DEPLOYMENT.md#microsoft-purview-optional). |
 
 ## After the demo
 

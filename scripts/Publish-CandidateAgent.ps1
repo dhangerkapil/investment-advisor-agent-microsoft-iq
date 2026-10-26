@@ -9,6 +9,8 @@
     durable state stores. It uses the same toolboxes and Work IQ connection, but consent is stored per agent: each
     user consents once for the candidate as well (the first call returns the consent link). Promote a candidate by
     publishing the same image to the live agent with Publish-AgentImage.ps1.
+    With Microsoft Purview on (ADVISOR_PURVIEW=on, copied from the live agent or set with -Environment), the
+    candidate's own identity also gets Purview's three Microsoft Graph roles, which Terraform grants the live agent's.
     The candidate's name: -AgentName, else ADVISOR_CANDIDATE_AGENT from .env.local, else <live agent>-candidate.
 
 .EXAMPLE
@@ -91,3 +93,35 @@ do {
     Start-Sleep -Seconds 10
 } while ((Get-Date) -lt $deadline)
 Write-Output "$AgentName version $($current.version): $($current.status); identity $($current.instance_identity.client_id)"
+
+# Microsoft Purview (ADVISOR_PURVIEW=on, copied from the live agent or set with -Environment): Terraform grants the
+# live agent's identity Purview's three Microsoft Graph roles (terraform/agent.tf); this agent has its own identity, so
+# it gets the same roles here. Without them Purview only logs errors and checks nothing.
+function Grant-PurviewGraphRoles([string]$PrincipalId) {
+    $graph = az ad sp show --id 00000003-0000-0000-c000-000000000000 --query '{id:id, roles:appRoles}' -o json | ConvertFrom-Json
+    $granted = @(az rest --method get --url "https://graph.microsoft.com/v1.0/servicePrincipals/$PrincipalId/appRoleAssignments" `
+            --query 'value[].appRoleId' -o json | ConvertFrom-Json)
+    foreach ($name in 'ProtectionScopes.Compute.All', 'Content.Process.All', 'ContentActivity.Write') {
+        $role = $graph.roles | Where-Object value -EQ $name | Select-Object -First 1
+        if (-not $role) { throw "Microsoft Graph has no app role $name." }
+        if ($granted -contains $role.id) { continue }
+        $file = New-TemporaryFile
+        @{ principalId = $PrincipalId; resourceId = $graph.id; appRoleId = $role.id } | ConvertTo-Json -Compress |
+            Set-Content -Path $file -Encoding utf8
+        try {
+            az rest --method post --url "https://graph.microsoft.com/v1.0/servicePrincipals/$($graph.id)/appRoleAssignedTo" `
+                --body "@$file" --headers 'Content-Type=application/json' -o none
+        } finally { Remove-Item $file -ErrorAction SilentlyContinue }
+        if ($LASTEXITCODE -ne 0) { throw "Granting $name failed." }
+        Write-Output "Granted $name to $AgentName's identity (Microsoft Purview)."
+    }
+}
+if ($variables['ADVISOR_PURVIEW'] -eq 'on') {
+    $principal = $current.instance_identity.principal_id
+    if (-not $principal) {
+        Write-Warning "No identity for $AgentName yet: rerun this script to grant it Microsoft Purview's Graph roles."
+    } else {
+        try { Grant-PurviewGraphRoles $principal }
+        catch { Write-Warning "Could not grant $AgentName's identity Microsoft Purview's Graph roles ($($_.Exception.Message)): Purview checks nothing for it until they are granted. A Global Administrator can rerun this script." }
+    }
+}

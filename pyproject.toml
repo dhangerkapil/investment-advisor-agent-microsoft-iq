@@ -12,6 +12,8 @@ dependencies = [
   "agent-framework-foundry>=1.15.0,<2",
   "agent-framework-foundry-hosting==1.0.0b261015",
   "agent-framework-azure-cosmos==1.0.0b261015",
+  # Microsoft Purview on the agent's turns (ADVISOR_PURVIEW; off unless Terraform's enable_purview turns it on).
+  "agent-framework-purview==1.0.0b261015",
   "azure-ai-agentserver-optimization==1.0.0b1",
   # agent-framework-foundry 1.15 caps azure-ai-projects below 2.8; the eval tooling uses 2.9 (evals/requirements-foundry.txt).
   "azure-ai-projects>=2.7,<2.8",
@@ -44,7 +46,7 @@ workplace-ui = "workplace_agent.ui.server:main"
 packages = ["src/workplace_agent"]
 
 [tool.uv]
-# Prereleases only where a dependency pins one (the Foundry hosting, Cosmos and optimization packages are betas).
+# Prereleases only where a dependency pins one (the Foundry hosting, Cosmos, Purview and optimization packages are betas).
 prerelease = "if-necessary"
 
 [tool.pytest.ini_options]

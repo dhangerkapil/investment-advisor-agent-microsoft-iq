@@ -201,6 +201,12 @@ variable "advisor_evidence_loop" {
   default     = true
 }
 
+variable "enable_purview" {
+  type        = bool
+  description = "Microsoft Purview on the agent's turns (ADVISOR_PURVIEW): each prompt and answer is checked against the tenant's Purview policies for AI apps. Grants the agent identity three Microsoft Graph application permissions (admin consent); scripts/Set-PurviewDlpForAgent.ps1 creates the demo's DLP policy."
+  default     = false
+}
+
 variable "demo_faults" {
   type        = string
   description = "Comma-separated components whose outage the agent always simulates (for example \"fabric\"); empty for none."

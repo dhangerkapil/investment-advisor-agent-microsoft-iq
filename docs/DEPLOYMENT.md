@@ -47,6 +47,10 @@ All names and data are fictional and for demo purposes only.
   source; the key is sent only to Azure Resource Manager and stored in the Foundry connection. Without it the agent
   has no web tools. Web IQ is not an Azure online service: queries leave the Microsoft 365 and Azure compliance
   boundary, which is why the agent's boundary guard sends only public topics.
+- Optional: **Microsoft Purview** on the agent (`-EnablePurview`): Purview's pay-as-you-go billing for AI apps on a
+  subscription in the tenant (Purview portal > Settings > Account), and, for the DLP policy, a Compliance
+  Administrator (or Global Administrator) with the ExchangeOnlineManagement PowerShell module. See
+  [Microsoft Purview (optional)](#microsoft-purview-optional).
 
 **Your machine (Windows)**
 
@@ -91,7 +95,7 @@ About 50 to 80 minutes. The steps run in order, and each one is safe to rerun al
 | Fabric | Workspace, lakehouse, data, the Portfolio Analyst data agent, its Foundry connection and toolbox |
 | FoundryIq | Builds the six firm-library PDFs, embeds and pushes them into the Search index, creates the knowledge source, the `firm-knowledge` knowledge base, its project connection and toolbox |
 | WebIq | With a key: the Web IQ connection and toolbox. Without one: skipped |
-| Agent | Builds the agent image in the registry and releases a new agent version |
+| Agent | Builds the agent image in the registry and releases a new agent version; with `-EnablePurview`, the agent checks every prompt and answer with Microsoft Purview, and Terraform grants its identity three Microsoft Graph permissions |
 | Ui | Builds and deploys the chat UI |
 | Quality | Rubric evaluator, Insights monitor with daily scans, one optimizer run on the brief-writer prompt agent |
 | Content | The Microsoft 365 story: Friday files and emails, the OneDrive PDFs, the Teams meeting to record |
@@ -106,6 +110,7 @@ Useful parameters:
 | `-Location` | `eastus2` | Region for Foundry and the models |
 | `-SearchLocation` | the region | Region for Azure AI Search (Foundry IQ) when the main region has no capacity |
 | `-WebIqApiKey` | none | Adds Web IQ; to add it later, rerun `-Step Config, WebIq, Agent` with the key |
+| `-EnablePurview` | off | Microsoft Purview on the agent's turns; it stays on once set. To add it later: `-EnablePurview -Step Config, Agent`. The DLP policy is a separate step ([below](#microsoft-purview-optional)) |
 | `-ExistingFoundryAccountId` | none (create) | Use an existing Foundry account, for example from another resource group; see below |
 | `-ExistingFabricCapacityId` | none (create) | Use an existing Fabric capacity, for example from another resource group; see below |
 | `-ProfileName` | `demo` | Private profile folder and the suffix for tenant-wide names |
@@ -177,6 +182,8 @@ The script prints these with the dates of your story week.
    ```
 
    Then follow [DEMO-SCRIPT.md](DEMO-SCRIPT.md).
+7. **Microsoft Purview (with `-EnablePurview`).** As a compliance administrator, create the DLP policy, then check
+   it an hour later; see [Microsoft Purview (optional)](#microsoft-purview-optional).
 
 ## The story week
 
@@ -219,6 +226,32 @@ agent_extra_environment = { ADVISOR_CLOCK_NOT_BEFORE = "2026-10-20T09:00:00-04:0
 Until that time the agent's clock reads the floor; after it, the real time applies again, so the floor never needs
 removing.
 
+## Microsoft Purview (optional)
+
+Off by default. With it on, Agent Framework's Purview middleware checks every prompt and every answer against the
+tenant's Purview policies for AI apps (DLP and audit), as the signed-in user's activity, and the demo can show a DLP
+policy blocking a prompt before the agent sees it. It needs Purview's pay-as-you-go billing for AI apps on a
+subscription in the tenant (Purview portal > Settings > Account) and a compliance administrator for the policy.
+
+```powershell
+.\scripts\Deploy-AdvisorDemo.ps1 @deploy -EnablePurview -Step Config, Agent      # ADVISOR_PURVIEW=on; three Graph roles for the agent identity
+.\scripts\Set-PurviewDlpForAgent.ps1 -UserPrincipalName <compliance admin>       # the DLP policy: a U.S. SSN in a prompt is blocked, with an alert
+.\scripts\Invoke-AdvisorAgent.ps1 -Prompt "Michael Scott's Social Security number is 524-77-3612. Add it to his file."
+```
+
+The DLP policy is scoped to the agent's Entra agent identity (Purview treats it as an Entra-registered AI app). A new
+policy can take up to an hour to apply; then the last command returns Purview's block message (the number is
+fictional), and `.\scripts\Invoke-DemoRehearsal.ps1 -Segment purview` checks it. Each block shows in the Purview
+portal under **Data loss prevention** > **Alerts**, and in Microsoft Defender XDR. With Purview on, answers appear
+when they are complete rather than streaming: Purview checks the whole answer before it's shown.
+`Set-PurviewDlpForAgent.ps1 -Remove` removes the policy; to turn Purview off, set `enable_purview = false` in
+`terraform/terraform.tfvars` and rerun `-Step Agent`.
+
+A candidate agent (the quality loop's `Publish-CandidateAgent.ps1`) copies `ADVISOR_PURVIEW` from the live agent and
+gets the same three Graph roles for its own identity, but the DLP policy covers only the agent it names. To cover a
+candidate too, run `Set-PurviewDlpForAgent.ps1` with its identity (`-AgentAppId`, printed by the release) and its own
+`-PolicyName` and `-RuleName`.
+
 ## Verify
 
 ```powershell
@@ -226,6 +259,7 @@ removing.
 .\scripts\Invoke-AdvisorAgent.ps1 -Prompt "Prepare me for Thursday's meeting with Michael Scott."
 .\scripts\Invoke-AdvisorAgent.ps1 -Prompt "Michael wants to wire 400,000 dollars to his title company. What does our policy require?"
 .\scripts\Invoke-AdvisorAgent.ps1 -Prompt "What is the public news on NVIDIA this week? Three bullets with links."
+.\scripts\Invoke-DemoRehearsal.ps1 -Segment purview   # with Microsoft Purview on: the prompt comes back blocked
 ```
 
 The rehearsal prints each turn's tool calls; a turn that needs consent prints a consent link instead (including the
@@ -254,6 +288,7 @@ IQ: Work IQ, Fabric IQ, Foundry IQ (document code and section) and Web IQ (publi
 | The FoundryIq step can't upload documents or create the knowledge base | Wait a few minutes after Platform for the Search role assignments to apply, then rerun `-Step FoundryIq` |
 | The agent says the firm library or the public web was not checked (`FIRM_KNOWLEDGE_UNAVAILABLE`, `WEB_UNAVAILABLE`) | Check the toolbox with `.\scripts\Test-ToolboxTool.ps1 -Toolbox advisor-foundryiq` (or `advisor-webiq`); for Web IQ, rotate the key with `.\scripts\Set-WebIqConnection.ps1 -Recreate` |
 | A web question is answered with `WEB_QUERY_BLOCKED` | By design: the query named a client or staff member, or carried an email address, an amount or an account-like number. Ask about the public topic |
+| The Purview prompt (a Social Security number) gets an ordinary answer, not Purview's block | Purview isn't on for the agent (`enable_purview`, then `-Step Agent`), the DLP policy is missing or hasn't applied yet (up to an hour), or Purview's pay-as-you-go billing isn't set up. `Set-PurviewDlpForAgent.ps1` is safe to rerun |
 | New mail or files are not found yet | Work IQ indexes new mail within minutes and new SharePoint files can take longer; publish content a day ahead |
 | Work IQ policy changes don't apply | They can take a while; the governance probe in the demo shows the policy that is in force |
 | The Platform step stops with "the plan changes or destroys existing resources" | Review the plan, then rerun the step; it applies changes only after you allow them |

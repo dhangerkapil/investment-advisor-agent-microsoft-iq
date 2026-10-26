@@ -14,6 +14,9 @@ Report a vulnerability** on this repository. Include the steps to reproduce and 
   only what the user can read. It never uses a shared user token.
 - Writes are limited: the agent can create a draft email only after the user approves it, and the Work IQ tenant
   policy blocks updates and deletes.
+- With Microsoft Purview on (`enable_purview`), every prompt and answer is checked against the tenant's Purview DLP
+  policies as the signed-in user's activity; a prompt a policy blocks never reaches the agent, and Purview raises an
+  alert. Purview's own errors are logged, never shown, so it can't take the agent down.
 - No secrets are stored in the repository. `.env.local` and `terraform/*.tfvars` are git-ignored and hold settings,
   not passwords. Client secrets for the Work IQ and Fabric IQ connections are created at deployment time and stored
   only in the Foundry connections; the content publisher's two-day secret stays in memory.

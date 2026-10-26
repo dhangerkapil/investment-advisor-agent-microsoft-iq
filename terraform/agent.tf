@@ -32,6 +32,7 @@ resource "azapi_data_plane_resource" "agent" {
         ENABLE_SENSITIVE_DATA          = var.agent_capture_content ? "true" : "false"
         WORKIQ_MODE                    = var.workiq_tool_mode == "" ? var.workiq_connection_kind : var.workiq_tool_mode
         ADVISOR_EVIDENCE_LOOP          = var.advisor_evidence_loop ? "on" : "off"
+        ADVISOR_PURVIEW                = var.enable_purview ? "on" : "off"
         DEMO_FAULTS                    = var.demo_faults
       }, local.optional_toolbox_environment, var.agent_extra_environment)
       rai_config = {
@@ -73,6 +74,29 @@ resource "azuread_app_role_assignment" "agent365_observability" {
   lifecycle {
     # The agent identity is stable across versions, but it reads as unknown while a new version is planned,
     # which would otherwise replace this grant on every release.
+    ignore_changes = [principal_object_id]
+  }
+}
+
+# Microsoft Purview on the agent's turns (enable_purview): the agent's own identity calls Purview's APIs for AI apps
+# on behalf of each signed-in user's activity, with three Microsoft Graph application permissions (admin consent).
+locals {
+  purview_graph_roles = ["ProtectionScopes.Compute.All", "Content.Process.All", "ContentActivity.Write"]
+}
+
+data "azuread_service_principal" "microsoft_graph" {
+  count     = var.enable_purview ? 1 : 0
+  client_id = "00000003-0000-0000-c000-000000000000"
+}
+
+resource "azuread_app_role_assignment" "agent_purview" {
+  for_each = local.deploy_agent && var.enable_purview ? toset(local.purview_graph_roles) : toset([])
+
+  app_role_id         = data.azuread_service_principal.microsoft_graph[0].app_role_ids[each.value]
+  principal_object_id = azapi_data_plane_resource.agent[0].output.instance_identity.principal_id
+  resource_object_id  = data.azuread_service_principal.microsoft_graph[0].object_id
+
+  lifecycle {
     ignore_changes = [principal_object_id]
   }
 }

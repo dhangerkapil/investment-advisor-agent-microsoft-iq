@@ -15,7 +15,8 @@ the harness (`inspect_document`, which downloads the file through Work IQ), a Wo
 Work IQ policy probe (`probe_workiq_policy`), durable memory and resumable, checkpointed research in the Foundry state
 store (`run_durable_meeting_pack`, with a presenter crash switch), exact portfolio arithmetic and an evidence loop.
 Code: `src/workplace_agent/` (`advisor.py`, `durable.py`, `workiq_tools.py`, `portfolio.py`, `knowledge.py`,
-`webiq.py`, `workiq_chat.py`, `ask.py`); instructions, skills and the model in `.agent_configs/baseline/` (the agent
+`webiq.py`, `workiq_chat.py`, `ask.py`, and `purview.py` for the optional Microsoft Purview checks); instructions,
+skills and the model in `.agent_configs/baseline/` (the agent
 optimizer's format). All names and data are fictional.
 A Microsoft Foundry Hosted Agent using Microsoft Agent Framework's Agent Harness
 and a custom Work IQ MCP connection exposed through Foundry Toolbox:
@@ -130,6 +131,31 @@ of checkpoints written after the last marker move and reuses them, runs only wha
 of every attempt, process, event and store write. Automatic re-entry by the platform (resilient background
 responses) is a separate preview capability that the Agent Framework host supports for workflow agents; this chat
 agent resumes when asked.
+
+### Microsoft Purview on the agent's turns (optional)
+
+With `enable_purview = true` (`Deploy-AdvisorDemo.ps1 -EnablePurview`), Terraform sets `ADVISOR_PURVIEW=on` and
+grants the agent identity three Microsoft Graph application permissions (`ProtectionScopes.Compute.All`,
+`Content.Process.All`, `ContentActivity.Write`). `purview.py` then adds Agent Framework's Purview middleware
+(`agent-framework-purview`): each prompt and each final answer is evaluated against the tenant's Purview policies for
+AI apps (DLP and audit), as the signed-in user's activity.
+
+- `AdvisorUserStamp` marks the input messages with the user's Entra object ID from the platform's request context;
+  Purview needs it because the agent calls Graph as itself. Without a valid ID, the turn isn't evaluated (logged).
+- `PurviewGate` wraps Purview's middleware. When a DLP policy blocks the prompt, Purview ends the run before the
+  agent starts, which in a streamed run would surface as an error; the gate answers with the policy message instead,
+  as the assistant, as a stream or a response, whichever the caller asked for. The agent never sees the prompt.
+- The factory places both layers inside the output hooks (`ToolTimingOutput`, `SourceProgressOutput`) and outside
+  the harness's evidence loop, so a prompt and the turn's final answer are each evaluated once, however many passes
+  the loop makes.
+- Purview's errors are logged, never shown (`ignore_exceptions`, `ignore_payment_required`), so Purview can't take
+  the agent down. Purview evaluates the whole answer before releasing it, so with Purview on the app shows an answer
+  when it is complete rather than streaming it.
+
+`scripts/Set-PurviewDlpForAgent.ps1` creates the DLP policy the demo uses: scoped to the agent's Entra agent identity
+(an Entra-registered AI app, Application enforcement plane), its rule blocks a prompt that contains a U.S. Social
+Security number and raises an alert in Purview and Microsoft Defender XDR. It needs Purview's pay-as-you-go billing
+and a compliance administrator; a new policy can take up to an hour to apply. `-Remove` removes it.
 
 ## Prerequisites
 

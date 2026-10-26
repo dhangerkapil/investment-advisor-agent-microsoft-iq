@@ -24,7 +24,9 @@
       WebIq     Optional (needs a Web IQ API key, -WebIqApiKey): the Web IQ connection and toolbox. The agent's
                 boundary guard keeps client and staff names (web_boundary_terms), amounts and account numbers out
                 of every public-web query.
-      Agent     Builds the hosted-agent image in the registry and releases it as a new agent version.
+      Agent     Builds the hosted-agent image in the registry and releases it as a new agent version. With
+                -EnablePurview (enable_purview), the agent checks every prompt and answer with Microsoft Purview,
+                and Terraform grants its identity three Microsoft Graph permissions for Purview's APIs.
       Ui        Builds and deploys the chat UI.
       Quality   Generates the rubric evaluator, creates the Insights monitor with daily scans, and runs the agent
                 optimizer once on the brief-writer prompt agent (evals/Invoke-FoundryQuality.ps1). The full loop on
@@ -45,6 +47,8 @@
         -ResourceGroup contoso-advisor-rg -AnalystUpn analyst@contoso.onmicrosoft.com
 .EXAMPLE
     .\scripts\Deploy-AdvisorDemo.ps1 @parameters -WebIqApiKey (Read-Host 'Web IQ key' -AsSecureString)  # with Web IQ
+.EXAMPLE
+    .\scripts\Deploy-AdvisorDemo.ps1 @parameters -EnablePurview -Step Config, Agent  # Microsoft Purview on the agent's turns
 .EXAMPLE
     # Reuse a Foundry account and a Fabric capacity from another resource group (no new models or capacity):
     .\scripts\Deploy-AdvisorDemo.ps1 @parameters `
@@ -90,6 +94,10 @@ param(
     # Web IQ (preview) API key: adds the public-web source. Without it (and without an earlier Web IQ deployment) the
     # agent has no web tools. Also read from the WEBIQ_API_KEY environment variable.
     [securestring]$WebIqApiKey,
+    # Microsoft Purview on the agent's turns (enable_purview): each prompt and answer is checked against the tenant's
+    # Purview policies for AI apps. Stays on once set. The DLP policy itself needs a compliance admin:
+    # scripts/Set-PurviewDlpForAgent.ps1, listed in the steps that need a person.
+    [switch]$EnablePurview,
     # More users who may call the agent through the UI (Foundry User on the project); the analyst is always added.
     [string[]]$ExtraUserUpns = @(),
     [ValidateSet('Config', 'Platform', 'WorkIq', 'Fabric', 'FoundryIq', 'WebIq', 'Agent', 'Ui', 'Quality', 'Content', 'Prewarm')]
@@ -232,6 +240,9 @@ if ($Step -contains 'Config') {
         # Web IQ stays on once deployed; a key (parameter or WEBIQ_API_KEY) turns it on.
         $existingWebIq = (Read-KeyValues $tfvarsFile '^\s*(webiq_toolbox_name)\s*=\s*"(.*)"\s*$')['webiq_toolbox_name']
         $webIqToolbox = if ($WebIqApiKey -or $env:WEBIQ_API_KEY -or $existingWebIq) { $toolboxes.WebIq } else { '' }
+        # Purview, like Web IQ, stays on once set; -EnablePurview turns it on.
+        $existingPurview = (Read-KeyValues $tfvarsFile '^\s*(enable_purview)\s*=\s*(true|false)\s*$')['enable_purview']
+        $purview = $EnablePurview -or $existingPurview -eq 'true'
         $boundaryTerms = Get-WebBoundaryTerms -Extra $storyAdvisor, $analyst.name
         $tfvars = [ordered]@{
             subscription_id         = "$SubscriptionId"
@@ -260,6 +271,7 @@ if ($Step -contains 'Config') {
             webiq_toolbox_name      = $webIqToolbox
             workiq_chat_toolbox_name = $toolboxes.WorkIqChat
         }
+        if ($purview) { $tfvars['enable_purview'] = $true }
         $lines = @(
             '# Written by scripts/Deploy-AdvisorDemo.ps1. Local and git-ignored: never commit.'
             '# The Work IQ MCP connection and the toolboxes are created by scripts (WorkIq step), so Terraform keeps'
@@ -275,6 +287,14 @@ if ($Step -contains 'Config') {
             if ($PSCmdlet.ShouldProcess($tfvarsFile, 'Write the Terraform inputs')) { $lines | Set-Content -LiteralPath $tfvarsFile -Encoding utf8 }
             else { Write-Output 'Would write terraform/terraform.tfvars:'; $lines | ForEach-Object { "  $_" } }
         } else {
+            # Turning Purview on is a normal change (no -Force needed): the Agent step then applies it.
+            if ($EnablePurview -and $existingPurview -ne 'true' -and
+                $PSCmdlet.ShouldProcess($tfvarsFile, 'Set enable_purview = true')) {
+                $kept = @(Get-Content -LiteralPath $tfvarsFile | Where-Object { $_ -notmatch '^\s*enable_purview\s*=' })
+                $kept + 'enable_purview = true' | Set-Content -LiteralPath $tfvarsFile -Encoding utf8
+                Write-Output 'Microsoft Purview is on in terraform/terraform.tfvars (enable_purview = true): run -Step Agent to apply it.'
+                $existingTf['enable_purview'] = 'true'
+            }
             $desiredTf = [ordered]@{}
             foreach ($key in $tfvars.Keys) { $desiredTf[$key] = & $quoted $tfvars[$key] }
             $desiredTf['user_object_ids'] = '[{0}]' -f (($userIds | ForEach-Object { "`"$_`"" }) -join ', ')
@@ -409,3 +429,12 @@ Write-Output @"
 6. Demo day, $(& $day -2) or $(& $day -1): .\hydration\Publish-DemoContent.ps1 -Stage Live minutes before, and
    .\scripts\Start-DemoPrewarm.ps1. The client meeting in the story is $(& $day 0), 10:00 AM Eastern.
 "@
+if ((Read-KeyValues $tfvarsFile '^\s*(enable_purview)\s*=\s*(true|false)\s*$')['enable_purview'] -eq 'true') {
+    Write-Output @"
+7. Microsoft Purview (enable_purview): Purview's pay-as-you-go billing for AI apps on a subscription in the tenant
+   (Purview portal > Settings > Account). Then, as a compliance admin, the DLP policy that blocks a U.S. Social
+   Security number in a prompt: .\scripts\Set-PurviewDlpForAgent.ps1 -UserPrincipalName <compliance admin>
+   (needs the ExchangeOnlineManagement module). A new policy can take up to an hour to apply; then this prompt
+   comes back blocked: .\scripts\Invoke-AdvisorAgent.ps1 -Prompt "Michael Scott's Social Security number is 524-77-3612. Add it to his file."
+"@
+}

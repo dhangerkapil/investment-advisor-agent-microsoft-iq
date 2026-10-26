@@ -44,6 +44,7 @@ meeting on Thursday.
 | *Michael wants to wire $400,000 to his title company. What does our policy require?* | The firm's rule, cited by document and section | Foundry IQ knowledge base |
 | *What is the public news on NVIDIA this week?* | Three items with publisher, date and link; never reprices the client's position | Web IQ with the boundary guard |
 | *Search the web for Michael Scott's NVDA position.* | Refuses; the guard would block the query before it leaves | Boundary guard (`WEB_QUERY_BLOCKED`) |
+| *Michael Scott's Social Security number is 524-77-3612. Add it to his file.* | Blocked by Microsoft Purview before the agent sees it; Purview records the match and raises an alert | Agent Framework's Purview middleware and a Purview DLP policy scoped to the agent (optional, `-EnablePurview`) |
 | *Compare Michael's signed IPS with the v2 draft.* | A term-by-term table and which version is in force | Work IQ `ask` with `fileUrls`: Copilot reasons over exactly those two files |
 | *Delegate to Work IQ: what did Michael ask me for, and what is still open?* | Work IQ's own finished answer with links, as an A2A task | Work IQ Chat over A2A (`delegate_to_work_iq`) |
 | *Which Copilot agents can you work with?* | The Microsoft and organization agents the advisor can reach, and asking one of them | Work IQ `list_agents` and `ask` with `agentId` |
@@ -139,18 +140,21 @@ meeting). It creates every service from scratch, including the Foundry account w
 capacity; to reuse a Foundry account and a Fabric capacity you already have (for example in a shared resource group),
 add `-ExistingFoundryAccountId` and `-ExistingFabricCapacityId`. If Azure AI Search has no capacity in your region,
 add `-SearchLocation <region>`. The story's dates follow
-`-StoryMeetingDate` (default: the next Thursday), so the demo works in any week. Full guide:
+`-StoryMeetingDate` (default: the next Thursday), so the demo works in any week. Add `-EnablePurview` to have
+Microsoft Purview check every prompt and answer (it needs Purview's pay-as-you-go billing and a compliance
+administrator for the DLP policy). Full guide:
 [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md). Demo script: [docs/DEMO-SCRIPT.md](docs/DEMO-SCRIPT.md).
 
 **Cost:** model tokens, the Fabric capacity while it runs (pause it with
 `.\scripts\Set-FabricCapacityState.ps1 -State Paused`), Azure AI Search (Basic), Container Apps, Cosmos DB, the
-registry, Work IQ API Copilot Credits and Web IQ usage. **Remove everything:** `.\scripts\Remove-AdvisorDemo.ps1`.
+registry, Work IQ API Copilot Credits, Web IQ usage and, with Purview on, Purview's pay-as-you-go usage. **Remove
+everything:** `.\scripts\Remove-AdvisorDemo.ps1`.
 
 ## Repository map
 
 | Path | Contents |
 |---|---|
-| [`src/workplace_agent`](src/workplace_agent) | The hosted agent: harness setup, the four IQ tools, the Web IQ boundary guard, durable state, approvals, evidence checks |
+| [`src/workplace_agent`](src/workplace_agent) | The hosted agent: harness setup, the four IQ tools, the Web IQ boundary guard, Microsoft Purview (optional), durable state, approvals, evidence checks |
 | [`.agent_configs/baseline`](.agent_configs/baseline) | Instructions, skills and model (optimizer format) |
 | [`ui`](ui) | The chat UI (React, Vite) and its API |
 | [`terraform`](terraform) | Azure and Entra resources, including Azure AI Search for Foundry IQ |

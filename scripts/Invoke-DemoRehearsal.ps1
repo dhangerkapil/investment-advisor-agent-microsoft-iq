@@ -16,16 +16,20 @@
     tools. The demo's order for such an agent: prep (the brief, all four IQs), then fouriqs (one question that needs
     all four IQs at once) and eachiq (one question per IQ, each in a new conversation, Work IQ first with every Work
     IQ feature), then web (public news and the boundary guard), meeting, chart, graph and workiq.
+    The purview segment needs Microsoft Purview on the agent (enable_purview) and the DLP policy
+    (scripts\Set-PurviewDlpForAgent.ps1): its prompt, with a fictional Social Security number, must come back blocked
+    before the agent runs a single tool.
 
 .EXAMPLE
     .\scripts\Invoke-DemoRehearsal.ps1
     .\scripts\Invoke-DemoRehearsal.ps1 -Segment prep, chart
     .\scripts\Invoke-DemoRehearsal.ps1 -Segment draft -RejectDraft
+    .\scripts\Invoke-DemoRehearsal.ps1 -Segment web, purview
     .\scripts\Invoke-DemoRehearsal.ps1 -AgentName investment-advisor-agent -Segment prep, fouriqs, eachiq, web, meeting, chart, graph, workiq
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('prep', 'fouriqs', 'eachiq', 'meeting', 'chart', 'graph', 'governance', 'draft', 'durability', 'changed', 'fabric', 'firm', 'web', 'workiq')]
+    [ValidateSet('prep', 'fouriqs', 'eachiq', 'meeting', 'chart', 'graph', 'governance', 'draft', 'durability', 'changed', 'fabric', 'firm', 'web', 'workiq', 'purview')]
     [string[]]$Segment = @('prep', 'meeting', 'chart', 'graph', 'governance', 'draft', 'durability'),
     [int]$TimeoutSec = 600,
     [switch]$RejectDraft,
@@ -73,6 +77,8 @@ $prompts = [ordered]@{
         "Compare Michael Scott's signed IPS with the IPS v2 draft. Which terms changed, and which version is in force?",
         'Delegate to Work IQ: what did Michael Scott ask me for in his recent emails, and what is still open?',
         'Which Copilot agents can you work with through Work IQ?')
+    # Microsoft Purview's DLP block (the number is fictional): needs enable_purview and the DLP policy.
+    purview    = @("Michael Scott's Social Security number is 524-77-3612. Add it to his file.")
 }
 
 $target = if ($AgentName) { @{ AgentName = $AgentName } } else { @{} }
@@ -113,6 +119,7 @@ foreach ($name in $Segment) {
             result  = if ($failed) { "failed after $($failed.Matches[0].Groups[1].Value)s" } elseif ($status) { "$($status.Matches[0].Groups[1].Value) in $($status.Matches[0].Groups[2].Value)s" } else { 'no response' }
             tools   = ($tools | Group-Object | ForEach-Object { if ($_.Count -gt 1) { "$($_.Name) x$($_.Count)" } else { $_.Name } }) -join ', '
             consent = $consent
+            answer  = $answer
         }
         if ($failed) { $output | Select-Object -First 6 | Write-Output } else { Write-Output ($answer.Substring(0, [Math]::Min(700, $answer.Length))) }
         if ($consent) { Write-Warning 'A consent link is pending: complete it in the demo app, then rerun.'; break }
@@ -136,5 +143,19 @@ if ($chart) {
         Write-Output 'Chart check: Work IQ (workiq___ask) read the chart, and inspect_document verified the page. As intended.'
     } else {
         Write-Output 'Chart check: neither workiq___ask nor read_chart ran: the answer has no chart values. Run the chart segment again.'
+    }
+}
+
+# The Purview step: the DLP policy blocks the prompt before the agent runs a single tool.
+$dlp = $summary | Where-Object segment -eq 'purview 1' | Select-Object -First 1
+if ($dlp) {
+    Write-Output ''
+    if ($dlp.answer -match 'Blocked by Microsoft Purview' -and -not $dlp.tools) {
+        Write-Output 'Purview check: the DLP policy blocked the prompt before the agent saw it (no tool call). As intended.'
+    } elseif ($dlp.answer -match 'Blocked by Microsoft Purview') {
+        Write-Output "Purview check: blocked, but tools ran first ($($dlp.tools)): look at the saved JSON."
+    } else {
+        Write-Output ('Purview check: not blocked. Check that the agent runs with Purview (enable_purview, ADVISOR_PURVIEW=on), ' +
+            'the DLP policy (scripts\Set-PurviewDlpForAgent.ps1; a new policy can take up to an hour) and Purview pay-as-you-go billing.')
     }
 }

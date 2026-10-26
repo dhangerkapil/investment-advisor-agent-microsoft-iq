@@ -13,6 +13,7 @@ gh_repo         = "dhangerkapil/investment-advisor-agent-microsoft-iq"
 # agent_cpu           = "1"
 # agent_memory        = "2Gi"
 # history_retention_days = 30
+# enable_purview      = true # Microsoft Purview on the agent's turns; then scripts/Set-PurviewDlpForAgent.ps1 (docs/DEPLOYMENT.md)
 # workiq_toolbox_name = "work-iq-toolbox"
 # workiq_mcp_connection_name = "work-iq-mcp"
 # workiq_mcp_allowed_tools = ["ask", "fetch", "get_schema", "search_paths", "fetch_blob", "retrieve"]

@@ -100,6 +100,20 @@ wheels = [
 ]
 
 [[package]]
+name = "agent-framework-purview"
+version = "1.0.0b261015"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "agent-framework-core" },
+    { name = "azure-core" },
+    { name = "httpx" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/cb/f9/6ab38dc012d4e8aeefa9b0ff584c10f41058e4387210a5f23a8d6279d78a/agent_framework_purview-1.0.0b261015.tar.gz", hash = "sha256:d8596322ef922c16bbbf2adcd60885a8edcf207ee6b2a6a28e6deae1614e3b2c", size = 39201, upload-time = "2026-10-15T09:59:51.099Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/0b/e0/4652a4a8401a01d1b88c5e56b240bad98acb94395495cf5b57030cbf305a/agent_framework_purview-1.0.0b261015-py3-none-any.whl", hash = "sha256:9e1344dcddf5084f91b8e0a96dbd891839cd4c89b42127ea84a8da4773ae771c", size = 35690, upload-time = "2026-10-15T09:59:15.006Z" },
+]
+
+[[package]]
 name = "aiohappyeyeballs"
 version = "2.7.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1081,6 +1095,7 @@ dependencies = [
     { name = "agent-framework-core" },
     { name = "agent-framework-foundry" },
     { name = "agent-framework-foundry-hosting" },
+    { name = "agent-framework-purview" },
     { name = "azure-ai-agentserver-optimization" },
     { name = "azure-ai-projects" },
     { name = "azure-identity" },
@@ -1115,6 +1130,7 @@ requires-dist = [
     { name = "agent-framework-core", specifier = ">=1.22.0,<2" },
     { name = "agent-framework-foundry", specifier = ">=1.15.0,<2" },
     { name = "agent-framework-foundry-hosting", specifier = "==1.0.0b261015" },
+    { name = "agent-framework-purview", specifier = "==1.0.0b261015" },
     { name = "azure-ai-agentserver-optimization", specifier = "==1.0.0b1" },
     { name = "azure-ai-projects", specifier = ">=2.7,<2.8" },
     { name = "azure-identity", specifier = ">=1.26,<2" },

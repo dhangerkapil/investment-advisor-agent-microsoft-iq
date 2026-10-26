@@ -211,6 +211,31 @@ async def test_factory_exposes_packaged_skills_with_only_local_read_operations_a
         await build.call_args.kwargs["client"].__aexit__(None, None, None)
 
 
+@pytest.mark.parametrize("enabled", [False, True])
+async def test_purview_wraps_each_turn_outside_the_evidence_loop_only_when_turned_on(
+    factory, monkeypatch: pytest.MonkeyPatch, enabled: bool,
+) -> None:
+    # Purview checks the prompt and the turn's final answer once: inside the harness's evidence loop it would check
+    # every pass, and a pass's own instructions as if the advisor had typed them.
+    if enabled:
+        monkeypatch.setenv("ADVISOR_PURVIEW", "on")
+        monkeypatch.setenv("AZURE_TENANT_ID", "11111111-1111-4111-8111-111111111111")
+    build = MagicMock(wraps=app.create_harness_agent)
+    monkeypatch.setattr(app, "create_harness_agent", build)
+    agent = await app.create_agent()
+    try:
+        names = [type(layer).__name__ for layer in agent.middleware]
+        assert names[:2] == ["ToolTimingOutput", "SourceProgressOutput"]
+        if enabled:
+            assert names[2:5] == ["AdvisorUserStamp", "PurviewGate", "AgentLoopMiddleware"]
+            assert type(agent.middleware[3].inner).__name__ == "PurviewPolicyMiddleware"
+        else:
+            assert names[2] == "AgentLoopMiddleware"
+            assert "PurviewGate" not in names and "AdvisorUserStamp" not in names
+    finally:
+        await build.call_args.kwargs["client"].__aexit__(None, None, None)
+
+
 async def test_every_packaged_skill_is_offered_and_loads(factory, monkeypatch: pytest.MonkeyPatch) -> None:
     # A SKILL.md the loader can't parse (for example mixed line endings in its front matter) silently drops the
     # skill from the agent: it once happened to public-web-research, and only Insights noticed.

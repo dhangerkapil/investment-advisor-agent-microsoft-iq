@@ -45,6 +45,7 @@ from .inventory import StateStoreInventory, framework_store_names, framework_sto
 from .knowledge import knowledge_tools
 from .portfolio import portfolio_tool
 from .progress import SourceProgressOutput, SourceSearchProgress
+from .purview import purview_middleware
 from .retrieval import ParallelWorkIQToolbox
 from .drafts import draft_tool
 from .webiq import web_tools
@@ -241,9 +242,11 @@ async def create_agent() -> Agent:
             loop_max_iterations=2 if loop_enabled else None,
             default_options={"store": False, "reasoning": {"effort": "low"}},
         )
-        # Register output hooks before the harness's lazy approval stream starts.
+        # Register output hooks before the harness's lazy approval stream starts. Purview (ADVISOR_PURVIEW) sits
+        # inside them and outside the harness's evidence loop, so each prompt and final answer is checked once.
         agent.middleware = [
-            ToolTimingOutput(timing), SourceProgressOutput(progress), *(agent.middleware or []),
+            ToolTimingOutput(timing), SourceProgressOutput(progress),
+            *purview_middleware(credential, enabled=flag("ADVISOR_PURVIEW", False)), *(agent.middleware or []),
         ]
         for layer in agent.middleware:
             if isinstance(layer, AgentLoopMiddleware):
