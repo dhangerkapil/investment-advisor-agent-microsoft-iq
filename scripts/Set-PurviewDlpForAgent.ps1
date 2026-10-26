@@ -19,6 +19,7 @@
 
 .EXAMPLE
     .\scripts\Set-PurviewDlpForAgent.ps1 -UserPrincipalName admin@contoso.onmicrosoft.com
+    .\scripts\Set-PurviewDlpForAgent.ps1 -UserPrincipalName admin@contoso.onmicrosoft.com -DisableWAM   # sign in in the browser
     .\scripts\Set-PurviewDlpForAgent.ps1 -UserPrincipalName admin@contoso.onmicrosoft.com -Remove
 #>
 [CmdletBinding()]
@@ -33,6 +34,9 @@ param(
     [string]$SensitiveInformationType = 'U.S. Social Security Number (SSN)',
     # A Security & Compliance PowerShell token, for automation; otherwise the sign-in is interactive.
     [string]$AccessToken,
+    # Sign in in the browser instead of the Windows account dialog, where that fails ("A window handle must be
+    # configured", for example in a host without a console window).
+    [switch]$DisableWAM,
     [switch]$Remove
 )
 
@@ -57,6 +61,7 @@ if (-not $Remove -and $AgentAppId -notmatch '^[0-9a-fA-F-]{36}$') {
 
 $connect = @{ UserPrincipalName = $UserPrincipalName; ShowBanner = $false }
 if ($AccessToken) { $connect.AccessToken = $AccessToken }
+if ($DisableWAM) { $connect.DisableWAM = $true }
 Connect-IPPSSession @connect
 try {
     $policy = Get-DlpCompliancePolicy -Identity $PolicyName -ErrorAction SilentlyContinue
