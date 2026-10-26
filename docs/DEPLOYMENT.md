@@ -248,9 +248,12 @@ when they are complete rather than streaming: Purview checks the whole answer be
 `terraform/terraform.tfvars` and rerun `-Step Agent`.
 
 A candidate agent (the quality loop's `Publish-CandidateAgent.ps1`) copies `ADVISOR_PURVIEW` from the live agent and
-gets the same three Graph roles for its own identity, but the DLP policy covers only the agent it names. To cover a
-candidate too, run `Set-PurviewDlpForAgent.ps1` with its identity (`-AgentAppId`, printed by the release) and its own
-`-PolicyName` and `-RuleName`.
+gets the same three Graph roles for its own identity, but the DLP policy covers only the agent it names. To turn
+Purview on for a candidate that is already released, release it in place, which keeps its own settings, state stores,
+description and metadata:
+`.\scripts\Publish-CandidateAgent.ps1 -AgentName <candidate> -FromAgent <candidate> -Environment @{ ADVISOR_PURVIEW = 'on' }`.
+To cover a candidate with the DLP policy too, run `Set-PurviewDlpForAgent.ps1` with its identity (`-AgentAppId`,
+printed by the release) and its own `-PolicyName` and `-RuleName`.
 
 ## Verify
 
@@ -271,7 +274,7 @@ IQ: Work IQ, Fabric IQ, Foundry IQ (document code and section) and Web IQ (publi
 - **Pause Fabric** when you are not demoing: `.\scripts\Set-FabricCapacityState.ps1 -State Paused` (and `Active`).
 - **Release agent changes:** `.\scripts\Publish-AgentImage.ps1` builds and releases a new version of the live agent.
 - **Try changes safely:** `.\scripts\Publish-CandidateAgent.ps1` releases a candidate next to the live agent, with
-  its own state stores.
+  its own state stores; with `-FromAgent` set to the candidate's own name it releases a new image to it in place.
 - **Rerun any step:** `.\scripts\Deploy-AdvisorDemo.ps1 @deploy -Step <name>`.
 
 ## Troubleshooting

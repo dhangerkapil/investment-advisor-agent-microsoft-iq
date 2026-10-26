@@ -12,11 +12,14 @@
     With Microsoft Purview on (ADVISOR_PURVIEW=on, copied from the live agent or set with -Environment), the
     candidate's own identity also gets Purview's three Microsoft Graph roles, which Terraform grants the live agent's.
     The candidate's name: -AgentName, else ADVISOR_CANDIDATE_AGENT from .env.local, else <live agent>-candidate.
+    With -FromAgent equal to -AgentName, the script releases a new image to that candidate in place: it keeps the
+    candidate's own settings, state stores, description and metadata, and changes only what -Environment and -Model set.
 
 .EXAMPLE
     .\scripts\Publish-CandidateAgent.ps1                                   # build and release the candidate
     .\scripts\Publish-CandidateAgent.ps1 -ImageUri <registry>/advisor-harness@sha256:...   # reuse an image
     .\scripts\Publish-CandidateAgent.ps1 -Model gpt-6-sol                   # try another model deployment
+    .\scripts\Publish-CandidateAgent.ps1 -AgentName <candidate> -FromAgent <candidate> -Environment @{ ADVISOR_PURVIEW = 'on' }
 #>
 [CmdletBinding()]
 param(
@@ -27,7 +30,7 @@ param(
     [ValidatePattern('^[a-z0-9][a-z0-9-]{0,30}$')][string]$StorePrefix,
     [string]$Model,
     [hashtable]$Environment = @{},
-    # Shown in the Foundry portal; default: "Candidate of <live agent>".
+    # Shown in the Foundry portal; default: "Candidate of <live agent>", or the candidate's own when released in place.
     [string]$Description,
     [int]$TimeoutSec = 900
 )
@@ -37,10 +40,11 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path $PSScriptRoot -Parent
 $tf = Join-Path $repoRoot 'terraform'
 $project = (terraform "-chdir=$tf" output -raw -no-color foundry_project_endpoint).Trim()
-if (-not $FromAgent) { $FromAgent = (terraform "-chdir=$tf" output -raw -no-color agent_name).Trim() }
+$liveAgent = (terraform "-chdir=$tf" output -raw -no-color agent_name).Trim()
+if (-not $FromAgent) { $FromAgent = $liveAgent }
 if (-not $AgentName) { $AgentName = if ($env:ADVISOR_CANDIDATE_AGENT) { $env:ADVISOR_CANDIDATE_AGENT } else { "$FromAgent-candidate" } }
-if ($FromAgent -eq $AgentName) { throw "The candidate needs its own name; $AgentName is the live agent." }
-if (-not $StorePrefix) { $StorePrefix = $AgentName }
+if ($AgentName -eq $liveAgent) { throw "The candidate needs its own name; $AgentName is the live agent (use Publish-AgentImage.ps1)." }
+$inPlace = $FromAgent -eq $AgentName
 
 function Invoke-Foundry([string]$Method, [string]$Path, $Body) {
     $arguments = @('rest', '--method', $Method, '--url', "$project/$Path", '--resource', 'https://ai.azure.com', '-o', 'json')
@@ -72,16 +76,21 @@ $definition = $source.definition
 $definition.container_configuration.image = $ImageUri
 $variables = [ordered]@{}
 $definition.environment_variables.PSObject.Properties | ForEach-Object { $variables[$_.Name] = [string]$_.Value }
+if (-not $StorePrefix) { $StorePrefix = if ($inPlace -and $variables['ADVISOR_STORE_PREFIX']) { $variables['ADVISOR_STORE_PREFIX'] } else { $AgentName } }
 $variables['ADVISOR_STORE_PREFIX'] = $StorePrefix
 if ($Model) { $variables['AZURE_AI_MODEL_DEPLOYMENT_NAME'] = $Model }
 foreach ($key in $Environment.Keys) { $variables[$key] = [string]$Environment[$key] }
 $definition.environment_variables = [pscustomobject]$variables
 
-$body = [ordered]@{
-    definition  = $definition
-    description = if ($Description) { $Description } else { "Candidate of $FromAgent (image $Tag); separate state stores ($StorePrefix-*)." }
-    metadata    = @{ candidate_of = $FromAgent; store_prefix = $StorePrefix }
+$metadata = [ordered]@{}
+if ($inPlace -and $source.metadata) { $source.metadata.PSObject.Properties | ForEach-Object { $metadata[$_.Name] = [string]$_.Value } }
+else { $metadata['candidate_of'] = $FromAgent }
+$metadata['store_prefix'] = $StorePrefix
+if (-not $Description) {
+    $Description = if ($inPlace -and $source.description) { $source.description }
+    else { "Candidate of $FromAgent (image $Tag); separate state stores ($StorePrefix-*)." }
 }
+$body = [ordered]@{ definition = $definition; description = $Description; metadata = $metadata }
 $version = Invoke-Foundry post "agents/$([uri]::EscapeDataString($AgentName))/versions?api-version=v1" $body
 Write-Output "Released $AgentName version $($version.version) from $FromAgent version $($source.version) ($($version.status))."
 
